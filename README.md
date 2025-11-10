@@ -1,4 +1,10 @@
-# Memory Updater
+<p align="center">
+    <img src="memory_updater.png" alt="Plugin Logo" width="50" style="border-radius: 50%; vertical-align: middle; margin-right: 10px;" />
+    <span style="font-size:2em; vertical-align: middle;"><b>Memory Updater</b></span>
+</p>
+
+[![CheshireCat AI Plugin - Memory Updater](https://custom-icon-badges.demolab.com/static/v1?label=&message=awesome+plugin&color=F4F4F5&style=for-the-badge&logo=cheshire_cat_black)](https://)
+
 
 This plugin allows you to remove memories from the Cheshire Cat's declarative memory based on the source url.
 

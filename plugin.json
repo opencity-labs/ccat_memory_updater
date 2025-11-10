@@ -4,7 +4,7 @@
     "description": "Remove and add memories to the internal db by source url.",
     "author_name": "OpenCity Labs",
     "author_url": "https://opencitylabs.it/",
-    "plugin_url": "https://github.com/opencitylabs/ccat_memory_updater",
+    "plugin_url": "https://github.com/opencity-labs/ccat_memory_updater",
     "tags": "plugins, declarative memory, memory, RAG",
-    "thumb": "https://raw.githubusercontent.com/opencitylabs/ccat_memory_updater/main/memory_updater.png"
+    "thumb": "https://raw.githubusercontent.com/opencity-labs/ccat_memory_updater/refs/heads/main/memory_updater.png"
 }
