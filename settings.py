@@ -36,6 +36,18 @@ class MemoryUpdaterSettings(BaseModel):
         description="The overlap between text chunks when uploading new content (only used for 'replace' action)."
     )
     
+    dietician_scrapycat_middleman: bool = Field(
+        default=False,
+        title="Dietician ScrapyCat Middleman",
+        description="Enable coordination between ScrapyCat and Dietician for automatic cleanup of outdated scraped content.",
+    )
+    
+    retry_failed_urls: bool = Field(
+        default=True,
+        title="Retry Failed URLs",
+        description="Automatically retry URLs that failed during the initial ScrapyCat ingestion process.",
+    )
+    
 
 
 # Give your settings model to the Cat.
