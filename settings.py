@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from cat.mad_hatter.decorators import plugin
 from enum import Enum
 
@@ -48,6 +48,31 @@ class MemoryUpdaterSettings(BaseModel):
         description="Automatically retry URLs that failed during the initial ScrapyCat ingestion process.",
     )
     
+    max_retry_attempts: int = Field(
+        default=3,
+        title="Max Retry Attempts",
+        description="Maximum number of retry attempts for failed URLs (only used when retry_failed_urls is enabled)."
+    )
+    
+    retry_delay_seconds: int = Field(
+        default=2,
+        title="Retry Delay (seconds)",
+        description="Delay in seconds between retry attempts for failed URLs."
+    )
+    
+    @validator('max_retry_attempts')
+    def validate_max_retry_attempts(cls, v):
+        """Validate that max retry attempts is between 1 and 10"""
+        if not 1 <= v <= 10:
+            raise ValueError('Max retry attempts must be between 1 and 10')
+        return v
+    
+    @validator('retry_delay_seconds')
+    def validate_retry_delay_seconds(cls, v):
+        """Validate that retry delay is between 0 and 60"""
+        if not 0 <= v <= 60:
+            raise ValueError('Retry delay must be between 0 and 60 seconds')
+        return v
 
 
 # Give your settings model to the Cat.

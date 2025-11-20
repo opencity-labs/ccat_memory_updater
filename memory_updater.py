@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import importlib
 from cat.log import log
 from cat.looking_glass.stray_cat import StrayCat
@@ -152,7 +153,7 @@ def delete_memories_by_source(
 
 
 # ScrapyCat Integration - Middleman hooks for Dietician coordination
-@hook(priority=5)
+@hook(priority=10)
 def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
     """
     Hook that listens to ScrapyCat completion and coordinates with Dietician
@@ -165,14 +166,13 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
     
     settings = cat.mad_hatter.get_plugin().load_settings()
     
-    mega_condition = (
-        not settings.get("dietician_scrapycat_middleman", False) or not dietician_plugin.active or not scrapycat_plugin.active
+    available = (
+        settings.get("dietician_scrapycat_middleman", False) and dietician_plugin.active and scrapycat_plugin.active
     )
 
-    if mega_condition:
+    if not available:
         return context_data
     
-    # Get the remove_documents_by_metadata function from the dietician plugin
     try:
         # Dynamically import the dietician plugin module
         # Construct the module path based on the plugin location
@@ -194,56 +194,70 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
         #     return context_data
         
         log.info(f"Starting ScrapyCat-Dietician cleanup for session {session_id}, command: {command}")
-        log.debug(f"Cleanup filter: command={command}, excluding {len(scraped_pages)} scraped URLs")
+        log.debug(f"Initial state: {len(scraped_pages)} scraped URLs, {len(failed_pages)} failed URLs")
         
-        # Remove outdated documents (same command, but source not in scraped pages)
-        # This handles cases where Dietician blocks re-ingestion of unchanged content
-        cleanup_result = remove_documents_by_metadata(
-            cat=cat,
-            metadata_filter={"command": command},
-            exclude_sources=scraped_pages
-        )
-        
-        log.info(f"Cleanup completed: {cleanup_result}")
-        log.debug(f"Removed URLs: {cleanup_result.get('removed_urls', [])}")
-        
-        # Retry failed pages if enabled
+        # Retry failed pages if enabled (before cleanup)
         retry_results = {"success_count": 0, "failed_count": 0, "errors": []}
+        remaining_failed = list(failed_pages)  # Create a mutable copy
+        updated_scraped = list(scraped_pages)  # Create a mutable copy
+        
         if failed_pages and settings.get("retry_failed_urls", True):
-            log.info(f"Attempting to retry {len(failed_pages)} failed URLs")
+            max_attempts = settings.get("max_retry_attempts", 3)
+            retry_delay = settings.get("retry_delay_seconds", 10)
             
-            for failed_url in failed_pages:
-                try:
-                    # Retry ingestion with current session metadata
-                    metadata = {
-                        "url": failed_url,
-                        "source": failed_url,
-                        "session_id": session_id,
-                        "command": command
-                    }
-                    
-                    # Use default chunk settings from ScrapyCat context or fallback to defaults
-                    chunk_size = context_data.get('chunk_size', 512)
-                    chunk_overlap = context_data.get('chunk_overlap', 128)
-                    
-                    cat.rabbit_hole.ingest_file(
-                        cat=cat, 
-                        file=failed_url, 
-                        chunk_size=chunk_size, 
-                        chunk_overlap=chunk_overlap,
-                        metadata=metadata
-                    )
-                    
-                    retry_results["success_count"] += 1
-                    log.info(f"Successfully retried failed URL: {failed_url}")
-                    
-                except Exception as e:
-                    retry_results["failed_count"] += 1
-                    error_msg = f"Retry failed for {failed_url}: {str(e)}"
-                    log.error(error_msg)
-                    retry_results["errors"].append(error_msg)
+            log.info(f"Starting retry process: {len(failed_pages)} failed URLs, max {max_attempts} attempts")
             
-            log.info(f"Retry completed: {retry_results}")
+            for attempt in range(1, max_attempts + 1):
+                if not remaining_failed:
+                    log.info("All failed URLs successfully retried, stopping early")
+                    break
+                
+                log.info(f"Retry attempt {attempt}/{max_attempts}: {len(remaining_failed)} URLs to retry")
+                
+                urls_to_retry = list(remaining_failed)  # Copy current failed list
+                
+                for failed_url in urls_to_retry:
+                    try:
+                        # Retry ingestion with current session metadata
+                        metadata = {
+                            "url": failed_url,
+                            "source": failed_url,
+                            "session_id": session_id,
+                            "command": command
+                        }
+                        
+                        # Use default chunk settings from ScrapyCat context or fallback to defaults
+                        chunk_size = context_data.get('chunk_size', 1024)
+                        chunk_overlap = context_data.get('chunk_overlap', 256)
+                        
+                        cat.rabbit_hole.ingest_file(
+                            cat=cat, 
+                            file=failed_url, 
+                            chunk_size=chunk_size, 
+                            chunk_overlap=chunk_overlap,
+                            metadata=metadata
+                        )
+                        
+                        # Success: move from failed to scraped
+                        remaining_failed.remove(failed_url)
+                        updated_scraped.append(failed_url)
+                        retry_results["success_count"] += 1
+                        log.info(f"[Attempt {attempt}] Successfully retried failed URL: {failed_url}")
+                        
+                    except Exception as e:
+                        error_msg = f"[Attempt {attempt}] Retry failed for {failed_url}: {str(e)}"
+                        log.warning(error_msg)
+                        retry_results["errors"].append(error_msg)
+                
+                # Wait before next attempt (if there are more attempts and still failed URLs)
+                if attempt < max_attempts and remaining_failed:
+                    log.info(f"Waiting {retry_delay} seconds before next retry attempt...")
+                    time.sleep(retry_delay)
+            
+            # Count final failures
+            retry_results["failed_count"] = len(remaining_failed)
+            
+            log.info(f"Retry completed: {retry_results['success_count']} succeeded, {retry_results['failed_count']} failed")
             
             # Send notification about retry results
             if retry_results["success_count"] > 0:
@@ -253,7 +267,7 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
             
             if retry_results["failed_count"] > 0:
                 cat.send_ws_message(
-                    f"⚠️ {retry_results['failed_count']} URLs still failed after retry"
+                    f"⚠️ {retry_results['failed_count']} URLs still failed after {max_attempts} retry attempts"
                 )
                 
         elif failed_pages and not settings.get("retry_failed_urls", True):
@@ -262,6 +276,24 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
         # Log failed pages processing summary
         if failed_pages:
             log.info(f"Failed pages processing completed: {retry_results}")
+        
+        # Update context_data with retry results so main process sees the updated state
+        context_data['scraped_pages'] = updated_scraped
+        context_data['failed_pages'] = remaining_failed
+        log.debug(f"Updated context: {len(updated_scraped)} total scraped URLs, {len(remaining_failed)} remaining failed URLs")
+        
+        # Remove outdated documents (same command, but source not in updated scraped pages)
+        # This cleanup happens AFTER retries, so successful retries are preserved
+        log.debug(f"Cleanup filter: command={command}, excluding {len(updated_scraped)} scraped URLs (including successful retries)")
+        
+        cleanup_result = remove_documents_by_metadata(
+            cat=cat,
+            metadata_filter={"command": command},
+            exclude_sources=updated_scraped
+        )
+        
+        log.info(f"Cleanup completed: {cleanup_result}")
+        log.debug(f"Removed URLs: {cleanup_result.get('removed_urls', [])}")
         
         # Send notification to user about cleanup
         if cleanup_result["removed_count"] > 0 or cleanup_result["vector_removed_count"] > 0:
