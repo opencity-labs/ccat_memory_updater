@@ -1,3 +1,6 @@
+import os
+import json
+import importlib
 from cat.log import log
 from cat.looking_glass.stray_cat import StrayCat
 from cat.mad_hatter.decorators import plugin, endpoint, hook
@@ -53,6 +56,42 @@ def delete_memories_by_source_logic(source: str, cat_or_ccat) -> int:
     return point_count
 
 
+def save_plugin_settings_to_file(settings: dict, plugin_path: str) -> dict:
+    """
+    Save plugin settings to settings.json file in the plugin directory.
+    This replicates the default save behavior from the Cat framework.
+    
+    Args:
+        settings: The settings dictionary to save
+        plugin_path: The path to the plugin directory
+        
+    Returns:
+        The updated settings dictionary, or empty dict if save failed
+    """
+    settings_file_path = os.path.join(plugin_path, "settings.json")
+    
+    # Load already saved settings (replicate load_settings behavior)
+    old_settings = {}
+    if os.path.exists(settings_file_path):
+        try:
+            with open(settings_file_path, "r") as json_file:
+                old_settings = json.load(json_file)
+        except Exception as e:
+            log.error(f"Unable to load existing settings: {e}")
+    
+    # Merge new settings with old ones
+    updated_settings = {**old_settings, **settings}
+    
+    # Save settings to file
+    try:
+        with open(settings_file_path, "w") as json_file:
+            json.dump(updated_settings, json_file, indent=4)
+        return updated_settings
+    except Exception as e:
+        log.error(f"Unable to save plugin settings: {e}")
+        return {}
+
+
 @plugin
 def save_settings(settings):
     ccat = CheshireCat()
@@ -64,26 +103,31 @@ def save_settings(settings):
     chunk_overlap = settings.get("chunk_overlap", 256)
     
     if not link:
-        log.error("No link provided")
-        return None
+        log.warning("No link provided")
+        
+    else:
+        delete_memories_by_source_logic(link, ccat)
+        
+        if action == Action.REPLACE:
+            # Upload new content from the link
+            log.info(f"Uploading content from link: {link}")
+            try:
+                ccat.rabbit_hole.ingest_file(
+                    cat=ccat,
+                    file=link,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap
+                )
+                log.info(f"Successfully uploaded content from {link}")
+            except Exception as e:
+                log.error(f"Failed to upload content from {link}: {e}")
+        
+        # reset the link to empty after processing
+        settings["link"] = ""
     
-    delete_memories_by_source_logic(link, ccat)
-    
-    if action == Action.REPLACE:
-        # Upload new content from the link
-        log.info(f"Uploading content from link: {link}")
-        try:
-            ccat.rabbit_hole.ingest_file(
-                cat=ccat,
-                file=link,
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap
-            )
-            log.info(f"Successfully uploaded content from {link}")
-        except Exception as e:
-            log.error(f"Failed to upload content from {link}: {e}")
-    
-    return None
+    # Save settings using the extracted function (replicates default Cat behavior)
+    plugin_path = os.path.dirname(os.path.abspath(__file__))
+    return save_plugin_settings_to_file(settings, plugin_path)
 
 
 @endpoint.delete(
@@ -113,52 +157,55 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
     """
     Hook that listens to ScrapyCat completion and coordinates with Dietician
     for cleanup of outdated scraped content.
-    """
-    # Check if middleman functionality is enabled
+    """    
+    DIETICIAN_ID = "ccat-dietician"
+    SCRAPYCAT_ID = "cc_scrapycat"
+    dietician_plugin = cat.mad_hatter.plugins[DIETICIAN_ID] if DIETICIAN_ID in cat.mad_hatter.plugins else False
+    scrapycat_plugin = cat.mad_hatter.plugins[SCRAPYCAT_ID] if SCRAPYCAT_ID in cat.mad_hatter.plugins else False
+    
     settings = cat.mad_hatter.get_plugin().load_settings()
-    if not settings.get("dietician_scrapycat_middleman", False):
-        log.debug("ScrapyCat-Dietician middleman is disabled, skipping cleanup")
-        return context_data
     
-    # Check if dietician plugin is available and enabled
-    dietician_plugin_id = "ccat-dietician"
-    if dietician_plugin_id not in cat.mad_hatter.plugins:
-        log.warning("Dietician plugin not found, cannot perform cleanup")
-        return context_data
-    
-    dietician_plugin = cat.mad_hatter.plugins[dietician_plugin_id]
-    if not dietician_plugin.is_enabled():
-        log.warning("Dietician plugin is not enabled, cannot perform cleanup")
+    mega_condition = (
+        not settings.get("dietician_scrapycat_middleman", False) or not dietician_plugin.active or not scrapycat_plugin.active
+    )
+
+    if mega_condition:
         return context_data
     
     # Get the remove_documents_by_metadata function from the dietician plugin
     try:
-        # Import the function from the dietician plugin module
-        dietician_module = dietician_plugin.plugin_module
+        # Dynamically import the dietician plugin module
+        # Construct the module path based on the plugin location
+        dietician_module_path = "cat.plugins.ccat-dietician.dietician"
+        dietician_module = importlib.import_module(dietician_module_path)
         remove_documents_by_metadata = getattr(dietician_module, 'remove_documents_by_metadata', None)
         
-        if not remove_documents_by_metadata:
-            log.warning("remove_documents_by_metadata function not found in dietician plugin")
-            return context_data
+        # if not remove_documents_by_metadata:
+        #     log.warning("remove_documents_by_metadata function not found in dietician plugin")
+        #     return context_data
         
         session_id = context_data.get('session_id')
         command = context_data.get('command')
         failed_pages = context_data.get('failed_pages', [])
+        scraped_pages = context_data.get('scraped_pages', [])
         
-        if not session_id or not command:
-            log.warning("ScrapyCat context missing session_id or command, skipping cleanup")
-            return context_data
+        # if not command:
+        #     log.warning("ScrapyCat context missing command, skipping cleanup")
+        #     return context_data
         
         log.info(f"Starting ScrapyCat-Dietician cleanup for session {session_id}, command: {command}")
+        log.debug(f"Cleanup filter: command={command}, excluding {len(scraped_pages)} scraped URLs")
         
-        # Remove outdated documents (same command, different session_id)
+        # Remove outdated documents (same command, but source not in scraped pages)
+        # This handles cases where Dietician blocks re-ingestion of unchanged content
         cleanup_result = remove_documents_by_metadata(
             cat=cat,
             metadata_filter={"command": command},
-            exclude_metadata={"session_id": session_id}
+            exclude_sources=scraped_pages
         )
         
         log.info(f"Cleanup completed: {cleanup_result}")
+        log.debug(f"Removed URLs: {cleanup_result.get('removed_urls', [])}")
         
         # Retry failed pages if enabled
         retry_results = {"success_count": 0, "failed_count": 0, "errors": []}
@@ -226,43 +273,5 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
     except Exception as e:
         log.error(f"Error in ScrapyCat-Dietician middleman: {str(e)}")
         # Don't fail the entire scraping process due to cleanup errors
-    
-    return context_data
-
-
-# Hook for before scraping starts
-@hook(priority=5)  
-def scrapycat_before_scrape(context_data: dict, cat: StrayCat):
-    """
-    Hook that listens to ScrapyCat before scraping starts.
-    Currently unused but available for future enhancements.
-    """
-    # Check if middleman functionality is enabled
-    settings = cat.mad_hatter.get_plugin().load_settings()
-    if not settings.get("dietician_scrapycat_middleman", False):
-        return context_data
-    
-    # Future: Could implement pre-scraping logic here if needed
-    session_id = context_data.get('session_id', 'unknown')
-    log.debug(f"ScrapyCat scraping about to start for session {session_id}")
-    
-    return context_data
-
-
-# Optional: Hook for after crawling (before ingestion) if needed for future enhancements
-@hook(priority=5)  
-def scrapycat_after_crawl(context_data: dict, cat: StrayCat):
-    """
-    Hook that listens to ScrapyCat after crawling phase.
-    Currently unused but available for future enhancements.
-    """
-    # Check if middleman functionality is enabled
-    settings = cat.mad_hatter.get_plugin().load_settings()
-    if not settings.get("dietician_scrapycat_middleman", False):
-        return context_data
-    
-    # Future: Could implement early cleanup logic here if needed
-    session_id = context_data.get('session_id', 'unknown')
-    log.debug(f"ScrapyCat crawling completed for session {session_id}")
     
     return context_data
