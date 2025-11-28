@@ -167,7 +167,7 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
     settings = cat.mad_hatter.get_plugin().load_settings()
     
     available = (
-        settings.get("dietician_scrapycat_middleman", False) and dietician_plugin.active and scrapycat_plugin.active
+        settings.get("dietician_scrapycat_middleman", False) and dietician_plugin and scrapycat_plugin
     )
 
     if not available:
