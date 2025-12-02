@@ -7,6 +7,7 @@ from cat.looking_glass.stray_cat import StrayCat
 from cat.mad_hatter.decorators import plugin, endpoint, hook
 from cat.looking_glass.cheshire_cat import CheshireCat
 from cat.auth.permissions import AuthPermission, AuthResource, check_permissions
+from cat.db import crud
 from pydantic import BaseModel
 from typing import Dict
 from .settings import Action
@@ -153,6 +154,53 @@ def delete_memories_by_source(
 
 
 # ScrapyCat Integration - Middleman hooks for Dietician coordination
+def check_plugin_active(plugin_id: str, cat: StrayCat) -> bool:
+    """
+    Check if a plugin is active using multiple reliable methods.
+    
+    This approach works whether plugins are installed via web interface or 
+    downloaded directly to the plugin folder.
+    
+    Args:
+        plugin_id: The plugin identifier to check
+        cat: StrayCat instance for accessing mad_hatter
+    
+    Returns:
+        bool: True if plugin is active, False otherwise
+    """
+    try:
+        # Method 1: Check if plugin is in active_plugins list (most reliable)
+        active_plugins = getattr(cat.mad_hatter, 'active_plugins', [])
+        log.debug(f"Active plugins from mad_hatter: {active_plugins}")
+        
+        if plugin_id in active_plugins:
+            log.debug(f"Plugin {plugin_id} found in active_plugins list")
+            return True
+            
+        # Method 2: Check database directly for active_plugins setting
+        active_plugins_setting = crud.get_setting_by_name("active_plugins")
+        if active_plugins_setting:
+            db_active_plugins = active_plugins_setting.get("value", [])
+            log.debug(f"Active plugins from database: {db_active_plugins}")
+            if plugin_id in db_active_plugins:
+                log.debug(f"Plugin {plugin_id} found in database active_plugins")
+                return True
+        else:
+            log.debug("No active_plugins setting found in database")
+            
+        # Method 3: Check if plugin exists and is loaded in mad_hatter.plugins
+        if hasattr(cat.mad_hatter, 'plugins') and plugin_id in cat.mad_hatter.plugins:
+            log.debug(f"Plugin {plugin_id} found in loaded plugins but not in active list")
+            # Plugin is loaded, check if it's in active list (redundant but safe)
+            return plugin_id in active_plugins
+            
+        log.debug(f"Plugin {plugin_id} not found in any check method")
+        return False
+    except Exception as e:
+        log.warning(f"Error checking plugin status for {plugin_id}: {e}")
+        return False
+
+
 @hook(priority=10)
 def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
     """
@@ -161,8 +209,12 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
     """    
     DIETICIAN_ID = "ccat-dietician"
     SCRAPYCAT_ID = "cc_scrapycat"
-    dietician_plugin = cat.mad_hatter.plugins[DIETICIAN_ID] if DIETICIAN_ID in cat.mad_hatter.plugins else False
-    scrapycat_plugin = cat.mad_hatter.plugins[SCRAPYCAT_ID] if SCRAPYCAT_ID in cat.mad_hatter.plugins else False
+    
+    # Use robust plugin checking method
+    dietician_plugin = check_plugin_active(DIETICIAN_ID, cat)
+    scrapycat_plugin = check_plugin_active(SCRAPYCAT_ID, cat)
+    
+    log.info(f"ScrapyCat-Dietician middleman hook triggered with dietician_plugin={dietician_plugin} and scrapycat_plugin={scrapycat_plugin}")
     
     settings = cat.mad_hatter.get_plugin().load_settings()
     
