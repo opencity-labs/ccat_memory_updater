@@ -207,7 +207,7 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
     Hook that listens to ScrapyCat completion and coordinates with Dietician
     for cleanup of outdated scraped content.
     """    
-    DIETICIAN_ID = "ccat-dietician"
+    DIETICIAN_ID = "ccat_dietician"
     SCRAPYCAT_ID = "cc_scrapycat"
     
     # Use robust plugin checking method
@@ -228,9 +228,28 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
     try:
         # Dynamically import the dietician plugin module
         # Construct the module path based on the plugin location
-        dietician_module_path = "cat.plugins.ccat-dietician.dietician"
-        dietician_module = importlib.import_module(dietician_module_path)
-        remove_documents_by_metadata = getattr(dietician_module, 'remove_documents_by_metadata', None)
+        # Try to import dietician plugin - it could be in either location
+        dietician_module = None
+        remove_documents_by_metadata = None
+        
+        try:
+            # First try: with hyphen (ccat-dietician)
+            dietician_module_path = "cat.plugins.ccat-dietician.dietician"
+            dietician_module = importlib.import_module(dietician_module_path)
+            remove_documents_by_metadata = getattr(dietician_module, 'remove_documents_by_metadata', None)
+        except ImportError:
+            try:
+            # Second try: with underscore (ccat_dietician)
+                dietician_module_path = "cat.plugins.ccat_dietician.dietician"
+                dietician_module = importlib.import_module(dietician_module_path)
+                remove_documents_by_metadata = getattr(dietician_module, 'remove_documents_by_metadata', None)
+            except ImportError:
+                log.error("Dietician plugin module not found in either location")
+                return context_data
+        
+        if not remove_documents_by_metadata:
+            log.error("remove_documents_by_metadata function not found in dietician plugin")
+            return context_data
         
         # if not remove_documents_by_metadata:
         #     log.warning("remove_documents_by_metadata function not found in dietician plugin")
