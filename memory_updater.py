@@ -35,7 +35,13 @@ def delete_memories_by_source_logic(source: str, cat_or_ccat) -> int:
         int: Number of points that were deleted
     """
     if not source:
-        log.warning("No source provided for memory deletion")
+        log.warning(json.dumps({
+            "component": "ccat_memory_updater",
+            "event": "memory_deletion_warning",
+            "data": {
+                "message": "No source provided for memory deletion"
+            }
+        }))
         return 0
     
     # Handle both StrayCat (endpoint) and CheshireCat (plugin) instances
@@ -55,12 +61,26 @@ def delete_memories_by_source_logic(source: str, cat_or_ccat) -> int:
     )
     
     point_count = len(points)
-    log.info(f"Found {point_count} points with source: {source}")
+    log.info(json.dumps({
+        "component": "ccat_memory_updater",
+        "event": "memory_deletion_scan",
+        "data": {
+            "source": source,
+            "points_found": point_count
+        }
+    }))
     
     if point_count > 0:
         # Delete the points
         collection.delete_points_by_metadata_filter({"source": source})
-        log.info(f"Deleted {point_count} memories with source: {source}")
+        log.info(json.dumps({
+            "component": "ccat_memory_updater",
+            "event": "memory_deletion_success",
+            "data": {
+                "source": source,
+                "points_deleted": point_count
+            }
+        }))
     
     return point_count
 
@@ -86,7 +106,13 @@ def save_plugin_settings_to_file(settings: dict, plugin_path: str) -> dict:
             with open(settings_file_path, "r") as json_file:
                 old_settings = json.load(json_file)
         except Exception as e:
-            log.error(f"Unable to load existing settings: {e}")
+            log.error(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "settings_load_error",
+                "data": {
+                    "error": str(e)
+                }
+            }))
     
     # Merge new settings with old ones
     updated_settings = {**old_settings, **settings}
@@ -97,7 +123,13 @@ def save_plugin_settings_to_file(settings: dict, plugin_path: str) -> dict:
             json.dump(updated_settings, json_file, indent=4)
         return updated_settings
     except Exception as e:
-        log.error(f"Unable to save plugin settings: {e}")
+        log.error(json.dumps({
+            "component": "ccat_memory_updater",
+            "event": "settings_save_error",
+            "data": {
+                "error": str(e)
+            }
+        }))
         return {}
 
 
@@ -112,14 +144,26 @@ def save_settings(settings):
     chunk_overlap = settings.get("chunk_overlap", 256)
     
     if not link:
-        log.warning("No link provided")
+        log.warning(json.dumps({
+            "component": "ccat_memory_updater",
+            "event": "settings_warning",
+            "data": {
+                "message": "No link provided"
+            }
+        }))
         
     else:
         delete_memories_by_source_logic(link, ccat)
         
         if action == Action.REPLACE:
             # Upload new content from the link
-            log.info(f"Uploading content from link: {link}")
+            log.info(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "content_upload_start",
+                "data": {
+                    "link": link
+                }
+            }))
             try:
                 ccat.rabbit_hole.ingest_file(
                     cat=ccat,
@@ -127,9 +171,22 @@ def save_settings(settings):
                     chunk_size=chunk_size,
                     chunk_overlap=chunk_overlap
                 )
-                log.info(f"Successfully uploaded content from {link}")
+                log.info(json.dumps({
+                    "component": "ccat_memory_updater",
+                    "event": "content_upload_success",
+                    "data": {
+                        "link": link
+                    }
+                }))
             except Exception as e:
-                log.error(f"Failed to upload content from {link}: {e}")
+                log.error(json.dumps({
+                    "component": "ccat_memory_updater",
+                    "event": "content_upload_error",
+                    "data": {
+                        "link": link,
+                        "error": str(e)
+                    }
+                }))
         
         # reset the link to empty after processing
         settings["link"] = ""
@@ -240,7 +297,14 @@ def check_url(url: str, cat: CheshireCat, dietician_module) -> tuple[str, bool]:
             file_bytes = response.content
                 
         except Exception as e:
-            log.warning(f"Failed to fetch {url} for check: {e}")
+            log.warning(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "url_check_fetch_error",
+                "data": {
+                    "url": url,
+                    "error": str(e)
+                }
+            }))
             # If we can't fetch it to check, we assume it needs update (or let the main process fail it)
             return url, True
 
@@ -257,14 +321,27 @@ def check_url(url: str, cat: CheshireCat, dietician_module) -> tuple[str, bool]:
                 handlers = getattr(cat.rabbit_hole, "_RabbitHole__file_handlers", None)
             
             if not handlers:
-                log.warning("Could not access RabbitHole file handlers. Falling back to update.")
+                log.warning(json.dumps({
+                    "component": "ccat_memory_updater",
+                    "event": "url_check_handler_error",
+                    "data": {
+                        "message": "Could not access RabbitHole file handlers. Falling back to update."
+                    }
+                }))
                 return url, True
 
             parser = MimeTypeBasedParser(handlers=handlers)
             documents = parser.parse(blob)
             
         except Exception as e:
-            log.warning(f"Failed to parse {url} for check: {e}")
+            log.warning(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "url_check_parse_error",
+                "data": {
+                    "url": url,
+                    "error": str(e)
+                }
+            }))
             return url, True
 
         # 3. Run the `before_rabbithole_splits_text` hook
@@ -298,10 +375,17 @@ def check_url(url: str, cat: CheshireCat, dietician_module) -> tuple[str, bool]:
                 computed_hash = dietician_data.get("hash")
         
         if not computed_hash:
-            log.warning(f"Dietician did not compute a hash for {url}. Is the plugin active?")
+            log.warning(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "url_check_hash_missing",
+                "data": {
+                    "url": url,
+                    "message": "Dietician did not compute a hash. Is the plugin active?"
+                }
+            }))
             return url, True
             
-        log.debug(f"Parallel check hash for {url}: {computed_hash}")
+        # log.debug(f"Parallel check hash for {url}: {computed_hash}")
 
         # 4. Check if we should update using Dietician's logic
         # We pass the computed hash directly to avoid re-computation
@@ -314,7 +398,14 @@ def check_url(url: str, cat: CheshireCat, dietician_module) -> tuple[str, bool]:
         return url, should_update
 
     except Exception as e:
-        log.error(f"Error checking {url}: {e}")
+        log.error(json.dumps({
+            "component": "ccat_memory_updater",
+            "event": "url_check_error",
+            "data": {
+                "url": url,
+                "error": str(e)
+            }
+        }))
         return url, True
 
 
@@ -336,33 +427,41 @@ def check_plugin_active(plugin_id: str, cat: StrayCat) -> bool:
     try:
         # Method 1: Check if plugin is in active_plugins list (most reliable)
         active_plugins = getattr(cat.mad_hatter, 'active_plugins', [])
-        log.debug(f"Active plugins from mad_hatter: {active_plugins}")
+        # log.debug(f"Active plugins from mad_hatter: {active_plugins}")
         
         if plugin_id in active_plugins:
-            log.debug(f"Plugin {plugin_id} found in active_plugins list")
+            # log.debug(f"Plugin {plugin_id} found in active_plugins list")
             return True
             
         # Method 2: Check database directly for active_plugins setting
         active_plugins_setting = crud.get_setting_by_name("active_plugins")
         if active_plugins_setting:
             db_active_plugins = active_plugins_setting.get("value", [])
-            log.debug(f"Active plugins from database: {db_active_plugins}")
+            # log.debug(f"Active plugins from database: {db_active_plugins}")
             if plugin_id in db_active_plugins:
-                log.debug(f"Plugin {plugin_id} found in database active_plugins")
+                # log.debug(f"Plugin {plugin_id} found in database active_plugins")
                 return True
         else:
-            log.debug("No active_plugins setting found in database")
+            pass
+            # log.debug("No active_plugins setting found in database")
             
         # Method 3: Check if plugin exists and is loaded in mad_hatter.plugins
         if hasattr(cat.mad_hatter, 'plugins') and plugin_id in cat.mad_hatter.plugins:
-            log.debug(f"Plugin {plugin_id} found in loaded plugins but not in active list")
+            # log.debug(f"Plugin {plugin_id} found in loaded plugins but not in active list")
             # Plugin is loaded, check if it's in active list (redundant but safe)
             return plugin_id in active_plugins
             
-        log.debug(f"Plugin {plugin_id} not found in any check method")
+        # log.debug(f"Plugin {plugin_id} not found in any check method")
         return False
     except Exception as e:
-        log.warning(f"Error checking plugin status for {plugin_id}: {e}")
+        log.warning(json.dumps({
+            "component": "ccat_memory_updater",
+            "event": "plugin_check_error",
+            "data": {
+                "plugin_id": plugin_id,
+                "error": str(e)
+            }
+        }))
         return False
 
 
@@ -382,11 +481,23 @@ def scrapycat_after_crawl(context_data: Dict[str, Any], cat: CheshireCat) -> Dic
         check_should_update = getattr(dietician_module, "check_should_update", None)
         remove_documents_by_metadata = getattr(dietician_module, "remove_documents_by_metadata", None)
     except ImportError:
-        log.warning("Dietician plugin not found. Skipping optimization.")
+        log.warning(json.dumps({
+            "component": "ccat_memory_updater",
+            "event": "optimization_skipped",
+            "data": {
+                "reason": "Dietician plugin not found"
+            }
+        }))
         return context_data
 
     if not check_should_update or not remove_documents_by_metadata:
-        log.warning("Dietician functions not found. Skipping optimization.")
+        log.warning(json.dumps({
+            "component": "ccat_memory_updater",
+            "event": "optimization_skipped",
+            "data": {
+                "reason": "Dietician functions not found"
+            }
+        }))
         return context_data
 
     session_id = context_data.get('session_id')
@@ -394,7 +505,13 @@ def scrapycat_after_crawl(context_data: Dict[str, Any], cat: CheshireCat) -> Dic
     scraped_pages = context_data.get('scraped_pages', [])
     failed_pages = context_data.get('failed_pages', [])
     
-    log.info(f"Starting ScrapyCat-Dietician optimization for session {session_id}")
+    log.info(json.dumps({
+        "component": "ccat_memory_updater",
+        "event": "optimization_start",
+        "data": {
+            "session_id": session_id
+        }
+    }))
     
     # --- Parallel "Should Update" Check ---
     
@@ -403,7 +520,13 @@ def scrapycat_after_crawl(context_data: Dict[str, Any], cat: CheshireCat) -> Dic
     enable_parallel_check = settings.get("enable_parallel_check", True)
     
     if enable_parallel_check and scraped_pages:
-        log.info(f"Checking {len(scraped_pages)} pages for updates in parallel...")
+        log.info(json.dumps({
+            "component": "ccat_memory_updater",
+            "event": "optimization_check_start",
+            "data": {
+                "page_count": len(scraped_pages)
+            }
+        }))
         
         pages_to_update = []
         pages_ignored = []
@@ -426,10 +549,24 @@ def scrapycat_after_crawl(context_data: Dict[str, Any], cat: CheshireCat) -> Dic
                     else:
                         pages_ignored.append(checked_url)
                 except Exception as e:
-                    log.error(f"Exception checking {url}: {e}")
+                    log.error(json.dumps({
+                        "component": "ccat_memory_updater",
+                        "event": "optimization_check_error",
+                        "data": {
+                            "url": url,
+                            "error": str(e)
+                        }
+                    }))
                     pages_to_update.append(url) # Default to update on error
         
-        log.info(f"Check complete: {len(pages_to_update)} pages need update, {len(pages_ignored)} unchanged.")
+        log.info(json.dumps({
+            "component": "ccat_memory_updater",
+            "event": "optimization_complete",
+            "data": {
+                "pages_to_update": len(pages_to_update),
+                "pages_ignored": len(pages_ignored)
+            }
+        }))
         
         # Update context
         context_data['scraped_pages'] = pages_to_update
@@ -458,7 +595,14 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
     dietician_plugin = check_plugin_active(DIETICIAN_ID, cat)
     scrapycat_plugin = check_plugin_active(SCRAPYCAT_ID, cat)
     
-    log.info(f"ScrapyCat-Dietician middleman hook triggered with dietician_plugin={dietician_plugin} and scrapycat_plugin={scrapycat_plugin}")
+    log.info(json.dumps({
+        "component": "ccat_memory_updater",
+        "event": "middleman_hook_triggered",
+        "data": {
+            "dietician_plugin": dietician_plugin,
+            "scrapycat_plugin": scrapycat_plugin
+        }
+    }))
     
     settings = cat.mad_hatter.get_plugin().load_settings()
     
@@ -488,11 +632,23 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
                 dietician_module = importlib.import_module(dietician_module_path)
                 remove_documents_by_metadata = getattr(dietician_module, 'remove_documents_by_metadata', None)
             except ImportError:
-                log.error("Dietician plugin module not found in either location")
+                log.error(json.dumps({
+                    "component": "ccat_memory_updater",
+                    "event": "middleman_error",
+                    "data": {
+                        "error": "Dietician plugin module not found in either location"
+                    }
+                }))
                 return context_data
         
         if not remove_documents_by_metadata:
-            log.error("remove_documents_by_metadata function not found in dietician plugin")
+            log.error(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "middleman_error",
+                "data": {
+                    "error": "remove_documents_by_metadata function not found in dietician plugin"
+                }
+            }))
             return context_data
         
         # if not remove_documents_by_metadata:
@@ -508,8 +664,16 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
         #     log.warning("ScrapyCat context missing command, skipping cleanup")
         #     return context_data
         
-        log.info(f"Starting ScrapyCat-Dietician cleanup for session {session_id}, command: {command}")
-        log.debug(f"Initial state: {len(scraped_pages)} scraped URLs, {len(failed_pages)} failed URLs")
+        log.info(json.dumps({
+            "component": "ccat_memory_updater",
+            "event": "cleanup_start",
+            "data": {
+                "session_id": session_id,
+                "command": command,
+                "scraped_count": len(scraped_pages),
+                "failed_count": len(failed_pages)
+            }
+        }))
         
         # Retry failed pages if enabled (before cleanup)
         retry_results = {"success_count": 0, "failed_count": 0, "errors": []}
@@ -520,14 +684,35 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
             max_attempts = settings.get("max_retry_attempts", 3)
             retry_delay = settings.get("retry_delay_seconds", 10)
             
-            log.info(f"Starting retry process: {len(failed_pages)} failed URLs, max {max_attempts} attempts")
+            log.info(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "retry_start",
+                "data": {
+                    "failed_count": len(failed_pages),
+                    "max_attempts": max_attempts
+                }
+            }))
             
             for attempt in range(1, max_attempts + 1):
                 if not remaining_failed:
-                    log.info("All failed URLs successfully retried, stopping early")
+                    log.info(json.dumps({
+                        "component": "ccat_memory_updater",
+                        "event": "retry_success_all",
+                        "data": {
+                            "message": "All failed URLs successfully retried, stopping early"
+                        }
+                    }))
                     break
                 
-                log.info(f"Retry attempt {attempt}/{max_attempts}: {len(remaining_failed)} URLs to retry")
+                log.info(json.dumps({
+                    "component": "ccat_memory_updater",
+                    "event": "retry_attempt",
+                    "data": {
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "remaining_count": len(remaining_failed)
+                    }
+                }))
                 
                 urls_to_retry = list(remaining_failed)  # Copy current failed list
                 
@@ -557,22 +742,50 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
                         remaining_failed.remove(failed_url)
                         updated_scraped.append(failed_url)
                         retry_results["success_count"] += 1
-                        log.info(f"[Attempt {attempt}] Successfully retried failed URL: {failed_url}")
+                        log.info(json.dumps({
+                            "component": "ccat_memory_updater",
+                            "event": "retry_url_success",
+                            "data": {
+                                "attempt": attempt,
+                                "url": failed_url
+                            }
+                        }))
                         
                     except Exception as e:
                         error_msg = f"[Attempt {attempt}] Retry failed for {failed_url}: {str(e)}"
-                        log.warning(error_msg)
+                        log.warning(json.dumps({
+                            "component": "ccat_memory_updater",
+                            "event": "retry_url_failed",
+                            "data": {
+                                "attempt": attempt,
+                                "url": failed_url,
+                                "error": str(e)
+                            }
+                        }))
                         retry_results["errors"].append(error_msg)
                 
                 # Wait before next attempt (if there are more attempts and still failed URLs)
                 if attempt < max_attempts and remaining_failed:
-                    log.info(f"Waiting {retry_delay} seconds before next retry attempt...")
+                    log.info(json.dumps({
+                        "component": "ccat_memory_updater",
+                        "event": "retry_wait",
+                        "data": {
+                            "seconds": retry_delay
+                        }
+                    }))
                     time.sleep(retry_delay)
             
             # Count final failures
             retry_results["failed_count"] = len(remaining_failed)
             
-            log.info(f"Retry completed: {retry_results['success_count']} succeeded, {retry_results['failed_count']} failed")
+            log.info(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "retry_complete",
+                "data": {
+                    "success_count": retry_results['success_count'],
+                    "failed_count": retry_results['failed_count']
+                }
+            }))
             
             # Send notification about retry results
             if retry_results["success_count"] > 0:
@@ -586,16 +799,26 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
                 )
                 
         elif failed_pages and not settings.get("retry_failed_urls", True):
-            log.info(f"Retry disabled: skipping {len(failed_pages)} failed URLs")
+            log.info(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "retry_disabled",
+                "data": {
+                    "skipped_count": len(failed_pages)
+                }
+            }))
         
         # Log failed pages processing summary
         if failed_pages:
-            log.info(f"Failed pages processing completed: {retry_results}")
+            log.info(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "retry_summary",
+                "data": retry_results
+            }))
         
         # Update context_data with retry results so main process sees the updated state
         context_data['scraped_pages'] = updated_scraped
         context_data['failed_pages'] = remaining_failed
-        log.debug(f"Updated context: {len(updated_scraped)} total scraped URLs, {len(remaining_failed)} remaining failed URLs")
+        # log.debug(f"Updated context: {len(updated_scraped)} total scraped URLs, {len(remaining_failed)} remaining failed URLs")
         
         # Remove outdated documents (same command, but source not in updated scraped pages)
         # This cleanup happens AFTER retries, so successful retries are preserved
@@ -607,7 +830,7 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
         
         exclude_sources = updated_scraped + context_data.get('ignored_pages', []) + remaining_failed
         
-        log.debug(f"Cleanup filter: command={command}, excluding {len(exclude_sources)} URLs")
+        # log.debug(f"Cleanup filter: command={command}, excluding {len(exclude_sources)} URLs")
         
         cleanup_result = remove_documents_by_metadata(
             cat=cat,
@@ -615,8 +838,12 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
             exclude_sources=exclude_sources
         )
         
-        log.info(f"Cleanup completed: {cleanup_result}")
-        log.debug(f"Removed URLs: {cleanup_result.get('removed_urls', [])}")
+        log.info(json.dumps({
+            "component": "ccat_memory_updater",
+            "event": "cleanup_complete",
+            "data": cleanup_result
+        }))
+        # log.debug(f"Removed URLs: {cleanup_result.get('removed_urls', [])}")
         
         # Send notification to user about cleanup
         if cleanup_result["removed_count"] > 0 or cleanup_result["vector_removed_count"] > 0:
@@ -626,7 +853,12 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
             )
         
     except Exception as e:
-        log.error(f"Error in ScrapyCat-Dietician middleman: {str(e)}")
-        # Don't fail the entire scraping process due to cleanup errors
+        log.error(json.dumps({
+            "component": "ccat_memory_updater",
+            "event": "middleman_error",
+            "data": {
+                "error": str(e)
+            }
+        }))
     
     return context_data
