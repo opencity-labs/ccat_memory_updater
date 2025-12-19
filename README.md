@@ -99,6 +99,7 @@ This plugin uses structured JSON logging to facilitate monitoring and debugging.
 | `optimization_check_start` | Logged when parallel URL checking starts | `page_count` |
 | `optimization_check_error` | Logged when checking a specific URL fails | `url`, `error` |
 | `optimization_complete` | Logged when optimization is complete | `pages_to_update`, `pages_ignored` |
+| `optimization_progress` | Logged periodically during parallel URL checking | `processed`, `total`, `percentage` |
 | `middleman_hook_triggered` | Logged when the ScrapyCat-Dietician middleman hook runs | `dietician_plugin`, `scrapycat_plugin` |
 | `middleman_error` | Logged when the middleman hook encounters an error | `error` |
 | `cleanup_start` | Logged when cleanup starts | `session_id`, `command`, `scraped_count`, `failed_count` |

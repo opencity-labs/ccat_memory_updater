@@ -477,7 +477,7 @@ def scrapycat_after_crawl(context_data: Dict[str, Any], cat: CheshireCat) -> Dic
     
     # Check if Dietician is available
     try:
-        dietician_module = importlib.import_module("cat.plugins.ccat-dietician.dietician")
+        dietician_module = importlib.import_module("cat.plugins.ccat_dietician.dietician")
         check_should_update = getattr(dietician_module, "check_should_update", None)
         remove_documents_by_metadata = getattr(dietician_module, "remove_documents_by_metadata", None)
     except ImportError:
@@ -540,8 +540,24 @@ def scrapycat_after_crawl(context_data: Dict[str, Any], cat: CheshireCat) -> Dic
                 for url in scraped_pages
             }
             
+            processed_count = 0
+            total_pages = len(scraped_pages)
+
             for future in as_completed(future_to_url):
+                processed_count += 1
                 url = future_to_url[future]
+
+                if processed_count % 5 == 0 or processed_count == total_pages:
+                    log.info(json.dumps({
+                        "component": "ccat_memory_updater",
+                        "event": "optimization_progress",
+                        "data": {
+                            "processed": processed_count,
+                            "total": total_pages,
+                            "percentage": f"{processed_count/total_pages*100:.1f}%"
+                        }
+                    }))
+
                 try:
                     checked_url, should_update = future.result()
                     if should_update:
@@ -588,7 +604,7 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
     Hook that listens to ScrapyCat completion and coordinates with Dietician
     for cleanup of outdated scraped content.
     """    
-    DIETICIAN_ID = "ccat-dietician"
+    DIETICIAN_ID = "ccat_dietician"
     SCRAPYCAT_ID = "cc_scrapycat"
     
     # Use robust plugin checking method
