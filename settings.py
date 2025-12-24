@@ -42,6 +42,12 @@ class MemoryUpdaterSettings(BaseModel):
         description="Enable coordination between ScrapyCat and Dietician for automatic cleanup of outdated scraped content.",
     )
     
+    enable_parallel_check: bool = Field(
+        default=False,
+        title="Enable Parallel Check",
+        description="Enable parallel checking of URLs to improve performance during ingestion.",
+    )
+    
     retry_failed_urls: bool = Field(
         default=True,
         title="Retry Failed URLs",

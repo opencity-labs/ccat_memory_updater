@@ -4,10 +4,10 @@ import time
 import importlib
 import threading
 import httpx
+import email.utils
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, Any
-from langchain.document_loaders.blob_loaders.schema import Blob
-from langchain_community.document_loaders.parsers.generic import MimeTypeBasedParser
+from typing import Dict, List, Any, Optional
 
 from cat.log import log
 from cat.looking_glass.stray_cat import StrayCat
@@ -218,189 +218,186 @@ def delete_memories_by_source(
 
 
 # --- Thread-Safe Mock Classes for Parallel Execution ---
+# (Removed as we no longer use the heavy hook-based check)
 
-class ThreadSafeWorkingMemory:
+def check_url(url: str, cat: CheshireCat) -> tuple[str, bool]:
     """
-    A thread-safe mock of WorkingMemory that uses thread-local storage
-    to capture data put into working memory during hook execution.
-    """
-    def __init__(self, local_storage):
-        self._local = local_storage
-
-    def __setitem__(self, key, value):
-        # Store in thread-local storage
-        if not hasattr(self._local, 'data'):
-            self._local.data = {}
-        self._local.data[key] = value
-
-    def get(self, key, default=None):
-        if hasattr(self._local, 'data'):
-            return self._local.data.get(key, default)
-        return default
-    
-    def __getitem__(self, key):
-        if hasattr(self._local, 'data') and key in self._local.data:
-            return self._local.data[key]
-        raise KeyError(key)
-
-    def __contains__(self, key):
-        return hasattr(self._local, 'data') and key in self._local.data
-
-    # Allow attribute assignment to be stored on the instance
-    # This is needed because Dietician does: cat.working_memory.ccat_dietician = ...
-    # Since this is a mock object, standard attribute assignment works fine, 
-    # but we need to ensure we don't overwrite our internal methods/properties.
-
-
-class ThreadSafeCat:
-    """
-    A thread-safe mock of the Cat instance to be passed to hooks running in threads.
-    It provides a thread-local working memory to capture side effects.
-    """
-    def __init__(self, original_cat):
-        self.original_cat = original_cat
-        self._local = threading.local()
-        self.working_memory = ThreadSafeWorkingMemory(self._local)
-        
-        # Copy necessary attributes from original cat
-        self.mad_hatter = original_cat.mad_hatter
-        self.rabbit_hole = original_cat.rabbit_hole
-        # Add other attributes if needed by hooks
-
-    def get_working_memory_data(self):
-        """Retrieve the data stored in the thread-local working memory."""
-        if hasattr(self._local, 'data'):
-            return self._local.data
-        return {}
-
-
-def check_url(url: str, cat: CheshireCat, dietician_module) -> tuple[str, bool]:
-    """
-    Check if a URL should be updated by running the ingestion pipeline logic
-    (fetching, parsing, hooks) and comparing the hash.
+    Check if a URL should be updated by comparing server's Last-Modified/ETag
+    with the ingestion timestamp of existing memories.
     
     Returns:
         tuple: (url, should_update)
     """
     try:
-        # 1. Fetch content using httpx (same as RabbitHole)
-        # We use the same User-Agent as RabbitHole to ensure we get the same content
-        headers = {"User-Agent": "Magic Browser"}
+        # 1. Check if URL exists in vector memory
+        collection = cat.memory.vectors.declarative
+        filter_obj = collection._qdrant_filter_from_dict({"source": url})
         
-        try:
-            # RabbitHole does not follow redirects and does not raise for status
-            # We must match this behavior exactly to get the same content hash
-            response = httpx.get(url, headers=headers, timeout=10)
+        # We only need one point to get the metadata
+        points, _ = collection.client.scroll(
+            collection_name=collection.collection_name,
+            scroll_filter=filter_obj,
+            limit=1,
+            with_payload=True
+        )
+        
+        if not points:
+            # New URL, must scrape
+            log.info(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "check_url_decision",
+                "data": {
+                    "url": url,
+                    "decision": "update",
+                    "reason": "new_url_no_memory"
+                }
+            }))
+            return url, True
             
-            # Get content type and bytes, just like RabbitHole
-            content_type = response.headers.get("Content-Type", "text/html").split(";")[0]
-            file_bytes = response.content
+        # Get ingestion timestamp from the first point
+        # RabbitHole stores 'when' as a float timestamp in metadata
+        metadata = points[0].payload.get("metadata", {})
+        ingestion_timestamp = metadata.get("when")
+        
+        if not ingestion_timestamp:
+            # No timestamp, assume update needed
+            log.info(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "check_url_decision",
+                "data": {
+                    "url": url,
+                    "decision": "update",
+                    "reason": "no_ingestion_timestamp"
+                }
+            }))
+            return url, True
+            
+        # Ensure ingestion_timestamp is a float
+        try:
+            ingestion_time = datetime.fromtimestamp(float(ingestion_timestamp), tz=timezone.utc)
+        except (ValueError, TypeError):
+            # Invalid timestamp, update
+            log.info(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "check_url_decision",
+                "data": {
+                    "url": url,
+                    "decision": "update",
+                    "reason": "invalid_ingestion_timestamp",
+                    "raw_timestamp": str(ingestion_timestamp)
+                }
+            }))
+            return url, True
+
+        # 2. Fetch HTTP headers
+        headers = {"User-Agent": "Magic Browser"}
+        try:
+            # Use HEAD request to get headers only
+            response = httpx.head(url, headers=headers, timeout=10, follow_redirects=True)
+            
+            # If HEAD fails (e.g. 405 Method Not Allowed), try GET with stream=True to avoid downloading body
+            if response.status_code == 405:
+                 response = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
+                 response.close() # Close immediately
+            
+            # If still error, assume update needed
+            if response.status_code >= 400:
+                log.info(json.dumps({
+                    "component": "ccat_memory_updater",
+                    "event": "check_url_decision",
+                    "data": {
+                        "url": url,
+                        "decision": "update",
+                        "reason": "http_error",
+                        "status_code": response.status_code
+                    }
+                }))
+                return url, True
                 
         except Exception as e:
             log.warning(json.dumps({
                 "component": "ccat_memory_updater",
-                "event": "url_check_fetch_error",
+                "event": "check_url_fetch_error",
                 "data": {
                     "url": url,
                     "error": str(e)
                 }
             }))
-            # If we can't fetch it to check, we assume it needs update (or let the main process fail it)
             return url, True
-
-        # 2. Parse content using RabbitHole's parsers
-        # This ensures we extract exactly the same text as the ingestion process
-        try:
-            blob = Blob(data=file_bytes, mimetype=content_type, source=url)
             
-            # Access file handlers from the cat instance
-            # Note: We access the private attribute via the property if available, or directly
-            handlers = getattr(cat.rabbit_hole, "file_handlers", None)
-            if not handlers:
-                # Fallback to accessing private attribute if property doesn't exist
-                handlers = getattr(cat.rabbit_hole, "_RabbitHole__file_handlers", None)
-            
-            if not handlers:
+        # 3. Compare timestamps
+        server_last_modified = response.headers.get("Last-Modified")
+        
+        if server_last_modified:
+            try:
+                # Parse HTTP date format (RFC 2822)
+                server_time = email.utils.parsedate_to_datetime(server_last_modified)
+                if server_time.tzinfo is None:
+                    server_time = server_time.replace(tzinfo=timezone.utc)
+                
+                # Add a small buffer (e.g. 1 second) to avoid precision issues
+                if server_time <= ingestion_time:
+                    # Content is older or same age as ingestion -> Unchanged
+                    log.info(json.dumps({
+                        "component": "ccat_memory_updater",
+                        "event": "check_url_decision",
+                        "data": {
+                            "url": url,
+                            "decision": "skip",
+                            "reason": "unchanged",
+                            "server_time": str(server_time),
+                            "ingestion_time": str(ingestion_time)
+                        }
+                    }))
+                    return url, False
+                else:
+                    # Content is newer -> Update
+                    log.info(json.dumps({
+                        "component": "ccat_memory_updater",
+                        "event": "check_url_decision",
+                        "data": {
+                            "url": url,
+                            "decision": "update",
+                            "reason": "content_newer",
+                            "server_time": str(server_time),
+                            "ingestion_time": str(ingestion_time)
+                        }
+                    }))
+                    return url, True
+            except Exception as e:
                 log.warning(json.dumps({
                     "component": "ccat_memory_updater",
-                    "event": "url_check_handler_error",
+                    "event": "check_url_date_parse_error",
                     "data": {
-                        "message": "Could not access RabbitHole file handlers. Falling back to update."
+                        "url": url,
+                        "error": str(e),
+                        "last_modified_header": server_last_modified
                     }
                 }))
                 return url, True
-
-            parser = MimeTypeBasedParser(handlers=handlers)
-            documents = parser.parse(blob)
-            
-        except Exception as e:
-            log.warning(json.dumps({
+        else:
+            log.info(json.dumps({
                 "component": "ccat_memory_updater",
-                "event": "url_check_parse_error",
+                "event": "check_url_decision",
                 "data": {
                     "url": url,
-                    "error": str(e)
+                    "decision": "update",
+                    "reason": "missing_last_modified"
                 }
             }))
-            return url, True
-
-        # 3. Run the `before_rabbithole_splits_text` hook
-        # WORKAROUND: We execute this hook manually here to trigger Dietician's hash computation logic.
-        # Dietician computes the hash and stores it in the cat's working memory (which we mocked with ThreadSafeCat).
-        # This allows us to reuse Dietician's exact logic without duplicating code, ensuring consistency.
-        thread_safe_cat = ThreadSafeCat(cat)
         
-        # Execute the hook
-        # We ignore the return value as we only need the side effect (hash computation)
-        _ = cat.mad_hatter.execute_hook(
-            "before_rabbithole_splits_text", 
-            documents, 
-            cat=thread_safe_cat
-        )
+        # Fallback: Check ETag if Last-Modified is missing
+        # Note: ETag comparison requires storing the ETag from previous scrape.
+        # Since we don't store ETag in metadata currently, we can't use it for comparison yet.
+        # We could store it now for future checks, but for this run we have to assume update if Last-Modified is missing.
         
-        # 4. Retrieve the hash from the working memory
-        # Dietician stores it as an attribute 'ccat_dietician' which is a dict containing 'hash'
-        computed_hash = None
-        
-        # Check standard location (attribute on working_memory)
-        if hasattr(thread_safe_cat.working_memory, "ccat_dietician"):
-            dietician_data = thread_safe_cat.working_memory.ccat_dietician
-            if isinstance(dietician_data, dict):
-                computed_hash = dietician_data.get("hash")
-        
-        # Check temp storage (fallback if Dietician used cat._ccat_dietician_temp)
-        if not computed_hash and hasattr(thread_safe_cat, "_ccat_dietician_temp"):
-             dietician_data = thread_safe_cat._ccat_dietician_temp
-             if isinstance(dietician_data, dict):
-                computed_hash = dietician_data.get("hash")
-        
-        if not computed_hash:
-            log.warning(json.dumps({
-                "component": "ccat_memory_updater",
-                "event": "url_check_hash_missing",
-                "data": {
-                    "url": url,
-                    "message": "Dietician did not compute a hash. Is the plugin active?"
-                }
-            }))
-            return url, True
-            
-        # log.debug(f"Parallel check hash for {url}: {computed_hash}")
-
-        # 4. Check if we should update using Dietician's logic
-        # We pass the computed hash directly to avoid re-computation
-        should_update = dietician_module.check_should_update(
-            url, 
-            cat, 
-            provided_hash=computed_hash
-        )
-        
-        return url, should_update
+        # log.debug(f"Check {url}: No Last-Modified header")
+        return url, True
 
     except Exception as e:
         log.error(json.dumps({
             "component": "ccat_memory_updater",
-            "event": "url_check_error",
+            "event": "check_url_unexpected_error",
             "data": {
                 "url": url,
                 "error": str(e)
@@ -475,56 +472,23 @@ def scrapycat_after_crawl(context_data: Dict[str, Any], cat: CheshireCat) -> Dic
     # Load settings
     settings = cat.mad_hatter.plugins["ccat_memory_updater"].load_settings()
     
-    # Check if Dietician is available
-    try:
-        dietician_module = importlib.import_module("cat.plugins.ccat_dietician.dietician")
-        check_should_update = getattr(dietician_module, "check_should_update", None)
-        remove_documents_by_metadata = getattr(dietician_module, "remove_documents_by_metadata", None)
-    except ImportError:
-        log.warning(json.dumps({
-            "component": "ccat_memory_updater",
-            "event": "optimization_skipped",
-            "data": {
-                "reason": "Dietician plugin not found"
-            }
-        }))
-        return context_data
-
-    if not check_should_update or not remove_documents_by_metadata:
-        log.warning(json.dumps({
-            "component": "ccat_memory_updater",
-            "event": "optimization_skipped",
-            "data": {
-                "reason": "Dietician functions not found"
-            }
-        }))
-        return context_data
-
     session_id = context_data.get('session_id')
-    command = context_data.get('command')
     scraped_pages = context_data.get('scraped_pages', [])
-    failed_pages = context_data.get('failed_pages', [])
     
-    log.info(json.dumps({
-        "component": "ccat_memory_updater",
-        "event": "optimization_start",
-        "data": {
-            "session_id": session_id
-        }
-    }))
     
     # --- Parallel "Should Update" Check ---
     
-    # Only perform check if we have pages and it's not a forced update (logic inside check_should_update handles force)
+    # Only perform check if we have pages
     # But we can check if we want to enable this optimization in settings
-    enable_parallel_check = settings.get("enable_parallel_check", True)
+    enable_parallel_check = settings.get("enable_parallel_check", False)
     
     if enable_parallel_check and scraped_pages:
         log.info(json.dumps({
             "component": "ccat_memory_updater",
             "event": "optimization_check_start",
             "data": {
-                "page_count": len(scraped_pages)
+                "page_count": len(scraped_pages),
+                "session_id": session_id
             }
         }))
         
@@ -536,7 +500,7 @@ def scrapycat_after_crawl(context_data: Dict[str, Any], cat: CheshireCat) -> Dic
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all checks
             future_to_url = {
-                executor.submit(check_url, url, cat, dietician_module): url 
+                executor.submit(check_url, url, cat): url 
                 for url in scraped_pages
             }
             
@@ -603,7 +567,7 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
     """
     Hook that listens to ScrapyCat completion and coordinates with Dietician
     for cleanup of outdated scraped content.
-    """    
+    """
     DIETICIAN_ID = "ccat_dietician"
     SCRAPYCAT_ID = "cc_scrapycat"
     
@@ -854,6 +818,38 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
             exclude_sources=exclude_sources
         )
         
+        # Remove sources from anonymizer allowedlist if present
+        removed_urls = cleanup_result.get('removed_urls', [])
+        if removed_urls:
+            try:
+                # Try to import remove_source from ccat_anonymizer
+                # We use dynamic import to avoid hard dependency
+                anonymizer_module = importlib.import_module("cat.plugins.ccat_anonymizer.allowedlist")
+                remove_source = getattr(anonymizer_module, "remove_source", None)
+                
+                if remove_source:
+                    for url in removed_urls:
+                        remove_source(url)
+                    
+                    log.info(json.dumps({
+                        "component": "ccat_memory_updater",
+                        "event": "anonymizer_cleanup",
+                        "data": {
+                            "removed_sources_count": len(removed_urls)
+                        }
+                    }))
+            except ImportError:
+                # Plugin not installed or different name, ignore
+                pass
+            except Exception as e:
+                log.error(json.dumps({
+                    "component": "ccat_memory_updater",
+                    "event": "anonymizer_cleanup_error",
+                    "data": {
+                        "error": str(e)
+                    }
+                }))
+
         log.info(json.dumps({
             "component": "ccat_memory_updater",
             "event": "cleanup_complete",
