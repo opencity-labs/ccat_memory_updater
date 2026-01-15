@@ -326,6 +326,25 @@ def check_url(url: str, cat: CheshireCat) -> tuple[str, bool]:
             return url, True
             
         # 3. Compare timestamps
+        server_etag = response.headers.get("ETag")
+        if server_etag:
+            log.info(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "check_url_etag_found",
+                "data": {
+                    "url": url,
+                    "etag": server_etag
+                }
+            }))
+        else:
+            log.info(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "check_url_no_etag",
+                "data": {
+                    "url": url
+                }
+            }))
+
         server_last_modified = response.headers.get("Last-Modified")
         
         if server_last_modified:
@@ -463,9 +482,9 @@ def check_plugin_active(plugin_id: str, cat: StrayCat) -> bool:
 
 
 @hook
-def scrapycat_after_crawl(context_data: Dict[str, Any], cat: CheshireCat) -> Dict[str, Any]:
+def scrapycat_after_scraping(context_data: Dict[str, Any], cat: CheshireCat) -> Dict[str, Any]:
     """
-    Hook called by ScrapyCat after crawling is finished but before ingestion.
+    Hook called by ScrapyCat after scraping is finished but before ingestion.
     We use this to parallelize the "should update" check.
     """
     
@@ -557,13 +576,13 @@ def scrapycat_after_crawl(context_data: Dict[str, Any], cat: CheshireCat) -> Dic
         context_data['ignored_pages'].extend(pages_ignored)
         
         if pages_ignored:
-            cat.send_ws_message(f"ℹ️ Skipped {len(pages_ignored)} unchanged pages.")
+            cat.send_ws_message(f"Skipped {len(pages_ignored)} unchanged pages.")
 
     return context_data
 
 
 @hook(priority=10)
-def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
+def scrapycat_after_ingestion(context_data: dict, cat: StrayCat):
     """
     Hook that listens to ScrapyCat completion and coordinates with Dietician
     for cleanup of outdated scraped content.
@@ -770,12 +789,12 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
             # Send notification about retry results
             if retry_results["success_count"] > 0:
                 cat.send_ws_message(
-                    f"🔄 Successfully retried {retry_results['success_count']} previously failed URLs"
+                    f"Successfully retried {retry_results['success_count']} previously failed URLs"
                 )
             
             if retry_results["failed_count"] > 0:
                 cat.send_ws_message(
-                    f"⚠️ {retry_results['failed_count']} URLs still failed after {max_attempts} retry attempts"
+                    f"{retry_results['failed_count']} URLs still failed after {max_attempts} retry attempts"
                 )
                 
         elif failed_pages and not settings.get("retry_failed_urls", True):
@@ -860,7 +879,7 @@ def scrapycat_after_scrape(context_data: dict, cat: StrayCat):
         # Send notification to user about cleanup
         if cleanup_result["removed_count"] > 0 or cleanup_result["vector_removed_count"] > 0:
             cat.send_ws_message(
-                f"🧹 Cleaned up {cleanup_result['removed_count']} outdated documents "
+                f"Cleaned up {cleanup_result['removed_count']} outdated documents "
                 f"and {cleanup_result['vector_removed_count']} vector chunks from previous scraping sessions"
             )
         
