@@ -65,6 +65,12 @@ class MemoryUpdaterSettings(BaseModel):
         title="Retry Delay (seconds)",
         description="Delay in seconds between retry attempts for failed URLs."
     )
+
+    ignore_display_none: bool = Field(
+        default=False,
+        title="Ignore Display None",
+        description="If enabled, ignores any div elements with style='display: none' during ingestion."
+    )
     
     @validator('max_retry_attempts')
     def validate_max_retry_attempts(cls, v):

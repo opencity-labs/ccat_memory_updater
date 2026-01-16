@@ -56,6 +56,7 @@ This plugin allows you to remove memories from the Cheshire Cat's declarative me
 - `action` *(enum: delete/replace, default: delete)*: The action to perform - either "delete" to only delete memories, or "replace" to delete and upload new content.
 - `chunk_size` *(int, default: 1024)*: The size of text chunks when uploading new content. Only used for 'replace' action.
 - `chunk_overlap` *(int, default: 256)*: The overlap between text chunks when uploading new content. Only used for 'replace' action.
+- `ignore_display_none` *(bool, default: False)*: If enabled, ignores any div elements with style='display: none' during ingestion.
 
 ## Note
 
@@ -98,6 +99,9 @@ This plugin uses structured JSON logging to facilitate monitoring and debugging.
 | `optimization_start` | Logged when optimization starts | `session_id` |
 | `optimization_check_start` | Logged when parallel URL checking starts | `page_count` |
 | `optimization_check_error` | Logged when checking a specific URL fails | `url`, `error` |
+| `html_parser_element_removed` | Logged when a hidden div is removed during parsing | `source`, `element`, `reason` |
+| `html_parser_replaced` | Logged when the default HTML parser is replaced | `parser`, `reason` |
+| `html_parser_settings_error` | Logged when loading settings for the parser hook fails | `error` |
 | `optimization_complete` | Logged when optimization is complete | `pages_to_update`, `pages_ignored` |
 | `optimization_progress` | Logged periodically during parallel URL checking | `processed`, `total`, `percentage` |
 | `middleman_hook_triggered` | Logged when the ScrapyCat-Dietician middleman hook runs | `dietician_plugin`, `scrapycat_plugin` |
