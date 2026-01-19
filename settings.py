@@ -19,7 +19,7 @@ class MemoryUpdaterSettings(BaseModel):
     )
     
     action: Action = Field(
-        default=Action.DELETE,
+        default=Action.REPLACE,
         title="Action to Perform",
         description="Choose 'delete' to only delete memories with matching source, or 'replace' to delete and then upload new content from the link."
     )
