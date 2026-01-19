@@ -208,18 +208,47 @@ def scrapycat_after_ingestion(context_data: dict, cat: StrayCat):
                         }))
                         
                     except Exception as e:
-                        error_msg = f"[Attempt {attempt}] Retry failed for {failed_url}: {str(e)}"
-                        log.warning(json.dumps({
-                            "component": "ccat_memory_updater",
-                            "event": "retry_url_failed",
-                            "data": {
-                                "attempt": attempt,
-                                "url": failed_url,
-                                "error": str(e)
-                            }
-                        }))
-                        retry_results["errors"].append(error_msg)
-                
+                        error_str = str(e).lower()
+                        is_permanent = False
+                        
+                        # Check for permanent errors where retry is useless
+                        if "type" in error_str and "supported" in error_str:
+                             is_permanent = True
+                        elif "404" in error_str or "not found" in error_str:
+                             is_permanent = True
+                        elif "403" in error_str or "forbidden" in error_str:
+                             is_permanent = True
+                        elif "400" in error_str or "bad request" in error_str:
+                             is_permanent = True
+                        
+                        if is_permanent:
+                            log.warning(json.dumps({
+                                "component": "ccat_memory_updater",
+                                "event": "retry_skipped_permanent_error",
+                                "data": {
+                                    "url": failed_url,
+                                    "error": str(e)
+                                }
+                            }))
+                            # Remove from retry list so we don't try again
+                            remaining_failed.remove(failed_url)
+                            retry_results["errors"].append(f"Permanent error for {failed_url}: {str(e)}")
+                            
+                        else:
+                            # Transient error (timeout, 500, etc) - keep in list for next attempt
+                            # We don't log intermediate failures to reduce noise, only final outcome
+                            
+                            if attempt == max_attempts:
+                                retry_results["errors"].append(f"Exhausted retries for {failed_url}: {str(e)}")
+                                log.error(json.dumps({
+                                    "component": "ccat_memory_updater",
+                                    "event": "retry_url_exhausted",
+                                    "data": {
+                                        "url": failed_url,
+                                        "error": str(e)
+                                    }
+                                }))
+
                 # Wait before next attempt (if there are more attempts and still failed URLs)
                 if attempt < max_attempts and remaining_failed:
                     log.info(json.dumps({
@@ -292,6 +321,18 @@ def scrapycat_after_ingestion(context_data: dict, cat: StrayCat):
         
         # Remove sources from anonymizer allowedlist if present
         removed_urls = cleanup_result.get('removed_urls', [])
+        
+        # Log each removed URL individually for better observability
+        for removed_url in removed_urls:
+            log.info(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "document_cleanup",
+                "data": {
+                    "url": removed_url,
+                    "session_id": session_id
+                }
+            }))
+            
         if removed_urls:
             try:
                 # Try to import remove_source from ccat_anonymizer
@@ -321,12 +362,6 @@ def scrapycat_after_ingestion(context_data: dict, cat: StrayCat):
                         "error": str(e)
                     }
                 }))
-
-        log.info(json.dumps({
-            "component": "ccat_memory_updater",
-            "event": "cleanup_complete",
-            "data": cleanup_result
-        }))
         
         # Send notification to user about cleanup
         if cleanup_result["removed_count"] > 0 or cleanup_result["vector_removed_count"] > 0:
