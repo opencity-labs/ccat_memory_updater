@@ -19,7 +19,7 @@ class MemoryUpdaterSettings(BaseModel):
     )
     
     action: Action = Field(
-        default=Action.DELETE,
+        default=Action.REPLACE,
         title="Action to Perform",
         description="Choose 'delete' to only delete memories with matching source, or 'replace' to delete and then upload new content from the link."
     )
@@ -64,6 +64,12 @@ class MemoryUpdaterSettings(BaseModel):
         default=2,
         title="Retry Delay (seconds)",
         description="Delay in seconds between retry attempts for failed URLs."
+    )
+
+    ignore_display_none: bool = Field(
+        default=False,
+        title="Ignore Display None",
+        description="If enabled, ignores any div elements with style='display: none' during ingestion."
     )
     
     @validator('max_retry_attempts')

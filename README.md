@@ -5,61 +5,61 @@
 
 [![CheshireCat AI Plugin - Memory Updater](https://custom-icon-badges.demolab.com/static/v1?label=&message=awesome+plugin&color=F4F4F5&style=for-the-badge&logo=cheshire_cat_black)](https://)
 
+This plugin provides advanced memory management capabilities for the Cheshire Cat, acting as a bridge between ingestion tools and the vector memory. It supports manual updates, sophisticated cleaning of scraped content, and coordination between scraping plugins.
 
-This plugin allows you to remove memories from the Cheshire Cat's declarative memory based on the source url.
+## Project Structure
 
-## How to Use
+The codebase is organized into three main components:
 
-1. In the plugin settings, set the `link` field to the source value you want to delete memories for.
-2. Choose the `action`:
-   - `delete`: Only delete memories with matching source
-   - `replace`: Delete memories with matching source and then upload new content from the link
-3. Save the settings. This will perform the selected action on all memories in the declarative collection that have the specified source in their metadata.
+1.  **Main (`memory_updater.py`)**: Handles core plugin logic, manual operations via settings, and API endpoints.
+2.  **Parser (`parser.py`)**: A custom HTML parser that enhances content quality before ingestion.
+3.  **Middleman (`middleman/`)**: Coordinates workflows between **ScrapyCat** and **Dietician** plugins.
+    *   `optimization.py`: Handles parallel checks to skip scraping unchanged content.
+    *   `cleanup.py`: Manages retries for failed URLs and cleans up outdated memories.
 
-### API Endpoints
+## Features
 
-- **DELETE `/custom/memory/delete-by-source`** 
-  
-  Deletes all memories from the declarative memory collection that match the specified source.
-  
-  **Request Body:**
-  ```json
-  {
-    "source": "string"
-  }
-  ```
-  
-  **Parameters:**
-  - `source` (string, required): The source identifier to match for deletion
-  
-  **Response:**
-  ```json
-  {
-    "message": "Successfully deleted {count} memories with source '{source}'"
-  }
-  ```
-  
-  **Permissions Required:** 
-  - Resource: MEMORY
-  - Permission: DELETE
-  
-  **Example:**
-  ```bash
-  curl -X DELETE http://localhost:1865/custom/memory/delete-by-source \
-    -H "Content-Type: application/json" \
-    -d '{"source": "https://example.com/page"}'
-  ```
+### 1. Manual Memory Management
+Directly from the plugin settings, you can manage memories by source URL:
+- **Delete**: Remove all vector memories associated with a specific URL.
+- **Replace**: Delete and immediately re-ingest content from a URL.
+
+### 2. API Endpoint
+**DELETE `/memory/delete-by-source`**
+Programmatically delete memories by source.
+```json
+{ "source": "https://example.com/page" }
+```
+
+### 3. Smart HTML Parsing
+Includes a custom HTML parser that detects and removes `div` elements with `style="display: none"`. This prevents hidden boilerplate text (like cookie banners or mobile menus) from polluting your vector memory.
+- **Config**: Enable via `ignore_display_none` setting.
+
+### 4. Middleman: ScrapyCat & Dietician Integration
+When used with **ScrapyCat** and **Dietician**, this plugin acts as a coordinator to optimize ingestion pipelines:
+
+*   **Smart Optimization**: Checks `Last-Modified` and `ETag` headers in parallel before scraping. If a page hasn't changed since the last ingestion, it's skipped to save resources.
+*   **Robust Retry Protocol**: Automatically retries failed URLs from ScrapyCat.
+    *   Distinguishes between transient errors (timeouts, 500s) and permanent errors (404s, unsupported types).
+    *   Only retries transient errors (configurable attempts and delay).
+*   **Auto-Cleanup**: Automatically detects and deletes memories for URLs that were *not* present in the latest scrape command, ensuring your memory stays in sync with your source list.
+*   **Anonymizer Sync**: Automatically removes deleted sources.
 
 ## Settings
 
-- `link` *(string, default: "")*: The URL or link to the content source for memory operations.
-- `action` *(enum: delete/replace, default: delete)*: The action to perform - either "delete" to only delete memories, or "replace" to delete and upload new content.
-- `chunk_size` *(int, default: 1024)*: The size of text chunks when uploading new content. Only used for 'replace' action.
-- `chunk_overlap` *(int, default: 256)*: The overlap between text chunks when uploading new content. Only used for 'replace' action.
-
-## Note
-
-Deletion only affects the declarative memory.
+| Setting | Default | Description |
+|:---|:---|:---|
+| `link` | - | Target URL for manual delete/replace operations. |
+| `action` | `delete` | Manual action to perform (`delete` or `replace`). |
+| `chunk_size` | 1024 | Chunk size for ingestions. |
+| `chunk_overlap` | 256 | Chunk overlap for ingestions. |
+| `ignore_display_none`| `False` | Remove hidden divs during HTML parsing. |
+| `enable_parallel_check`| `False` | Enable pre-scrape header checks (requires ScrapyCat). |
+| `check_workers` | 10 | Number of threads for parallel checks. |
+| `dietician_scrapycat_middleman`| `False` | Enable coordination between plugins. |
+| `retry_failed_urls` | `True` | Auto-retry failed ScrapyCat URLs. |
+| `max_retry_attempts` | 3 | Number of retry attempts. |
+| `retry_delay_seconds` | 10 | Delay between retries. |
 
 ## Log Schema
 
@@ -77,39 +77,57 @@ This plugin uses structured JSON logging to facilitate monitoring and debugging.
 
 ### Event Types
 
-| Event Name | Description | Data Fields |
-|------------|-------------|-------------|
-| `memory_deletion_warning` | Logged when memory deletion is requested without a source | `message` |
-| `memory_deletion_scan` | Logged when scanning for memories to delete | `source`, `points_found` |
-| `memory_deletion_success` | Logged when memories are successfully deleted | `source`, `points_deleted` |
-| `settings_load_error` | Logged when loading settings fails | `error` |
-| `settings_save_error` | Logged when saving settings fails | `error` |
-| `settings_warning` | Logged when settings are invalid (e.g. no link) | `message` |
-| `content_upload_start` | Logged when starting to upload content from a link | `link` |
-| `content_upload_success` | Logged when content upload succeeds | `link` |
-| `content_upload_error` | Logged when content upload fails | `link`, `error` |
-| `url_check_fetch_error` | Logged when fetching a URL for checking fails | `url`, `error` |
-| `url_check_handler_error` | Logged when RabbitHole handlers are inaccessible | `message` |
-| `url_check_parse_error` | Logged when parsing a URL fails | `url`, `error` |
-| `url_check_hash_missing` | Logged when Dietician fails to compute a hash | `url`, `message` |
-| `url_check_error` | Logged when checking a URL fails | `url`, `error` |
-| `plugin_check_error` | Logged when checking plugin status fails | `plugin_id`, `error` |
-| `optimization_skipped` | Logged when optimization is skipped (e.g. Dietician missing) | `reason` |
-| `optimization_start` | Logged when optimization starts | `session_id` |
-| `optimization_check_start` | Logged when parallel URL checking starts | `page_count` |
-| `optimization_check_error` | Logged when checking a specific URL fails | `url`, `error` |
-| `optimization_complete` | Logged when optimization is complete | `pages_to_update`, `pages_ignored` |
-| `optimization_progress` | Logged periodically during parallel URL checking | `processed`, `total`, `percentage` |
-| `middleman_hook_triggered` | Logged when the ScrapyCat-Dietician middleman hook runs | `dietician_plugin`, `scrapycat_plugin` |
-| `middleman_error` | Logged when the middleman hook encounters an error | `error` |
-| `cleanup_start` | Logged when cleanup starts | `session_id`, `command`, `scraped_count`, `failed_count` |
-| `retry_start` | Logged when retry process starts | `failed_count`, `max_attempts` |
-| `retry_success_all` | Logged when all retries succeed | `message` |
-| `retry_attempt` | Logged for each retry attempt | `attempt`, `max_attempts`, `remaining_count` |
-| `retry_url_success` | Logged when a single URL retry succeeds | `attempt`, `url` |
-| `retry_url_failed` | Logged when a single URL retry fails | `attempt`, `url`, `error` |
-| `retry_wait` | Logged when waiting between retries | `seconds` |
-| `retry_complete` | Logged when retry process completes | `success_count`, `failed_count` |
-| `retry_disabled` | Logged when retries are disabled | `skipped_count` |
-| `retry_summary` | Logged with summary of retry results | `success_count`, `failed_count`, `errors` |
-| `cleanup_complete` | Logged when cleanup is complete | `removed_count`, `vector_removed_count`, `removed_urls` |
+#### Main (`memory_updater.py`)
+| Event Name | Description |
+|------------|-------------|
+| `memory_deletion_warning` | Logged when memory deletion is requested without a source |
+| `memory_deletion_scan` | Logged when scanning for memories to delete |
+| `memory_deletion_success` | Logged when memories are successfully deleted |
+| `settings_load_error` | Logged when loading settings fails |
+| `settings_save_error` | Logged when saving settings fails |
+| `settings_warning` | Logged when settings are invalid (e.g. no link) |
+| `content_upload_start` | Logged when starting to upload content from a link |
+| `content_upload_success` | Logged when content upload succeeds |
+| `content_upload_error` | Logged when content upload fails |
+
+#### Parser (`parser.py`)
+| Event Name | Description |
+|------------|-------------|
+| `html_parser_settings_error` | Logged when loading settings for the parser hook fails |
+
+#### Optimization (`middleman/optimization.py`)
+| Event Name | Description |
+|------------|-------------|
+| `check_url_decision` | Logged when deciding whether to update a URL |
+| `check_url_fetch_error` | Logged when fetching a URL for checking fails |
+| `check_url_etag_found` | Logged when an ETag header is found |
+| `check_url_no_etag` | Logged when an ETag header is missing |
+| `check_url_date_parse_error` | Logged when parsing Last-Modified date fails |
+| `check_url_unexpected_error` | Logged when an unexpected error occurs during check |
+| `optimization_check_start` | Logged when parallel URL checking starts |
+| `optimization_progress` | Logged periodically during parallel URL checking |
+| `optimization_check_error` | Logged when checking a specific URL fails |
+| `optimization_complete` | Logged when optimization is complete |
+
+#### Cleanup (`middleman/cleanup.py`)
+| Event Name | Description |
+|------------|-------------|
+| `plugin_check_error` | Logged when checking plugin status fails |
+| `middleman_hook_triggered` | Logged when the ScrapyCat-Dietician middleman hook runs |
+| `middleman_error` | Logged when the middleman hook encounters an error |
+| `cleanup_start` | Logged when cleanup starts |
+| `retry_start` | Logged when retry process starts |
+| `retry_success_all` | Logged when all retries succeed |
+| `retry_attempt` | Logged for each retry attempt |
+| `retry_url_success` | Logged when a single URL retry succeeds |
+| `retry_skipped_permanent_error` | Logged when a permanent error causes retry skip |
+| `retry_url_exhausted` | Logged when a URL fails all retry attempts |
+| `retry_wait` | Logged when waiting between retries |
+| `retry_complete` | Logged when retry process completes |
+| `retry_disabled` | Logged when retries are disabled |
+| `retry_summary` | Logged with summary of retry results |
+| `document_cleanup` | Logged for each URL removed during cleanup |
+| `anonymizer_cleanup` | Logged when sources are removed from anonymizer |
+| `anonymizer_cleanup_error` | Logged when anonymizer cleanup fails |
+
+
