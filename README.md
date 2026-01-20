@@ -126,6 +126,7 @@ This plugin uses structured JSON logging to facilitate monitoring and debugging.
 | `retry_complete` | Logged when retry process completes |
 | `retry_disabled` | Logged when retries are disabled |
 | `retry_summary` | Logged with summary of retry results |
+| `url_scraped` | Logged for each successfully scraped URL |
 | `document_cleanup` | Logged for each URL removed during cleanup |
 | `anonymizer_cleanup` | Logged when sources are removed from anonymizer |
 | `anonymizer_cleanup_error` | Logged when anonymizer cleanup fails |

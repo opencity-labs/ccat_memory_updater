@@ -304,6 +304,18 @@ def scrapycat_after_ingestion(context_data: dict, cat: StrayCat):
         context_data['scraped_pages'] = updated_scraped
         context_data['failed_pages'] = remaining_failed
         
+        # Log all scraped URLs one per line for metrics/observability
+        for url in updated_scraped:
+            log.info(json.dumps({
+                "component": "ccat_memory_updater",
+                "event": "url_scraped",
+                "data": {
+                    "url": url,
+                    "session_id": session_id,
+                    "command": command
+                }
+            }))
+            
         # Remove outdated documents (same command, but source not in updated scraped pages)
         # This cleanup happens AFTER retries, so successful retries are preserved
         # We exclude:
