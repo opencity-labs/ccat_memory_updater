@@ -1,4 +1,5 @@
 import json
+import re
 from bs4 import BeautifulSoup
 from langchain_community.document_loaders.parsers.html.bs4 import BS4HTMLParser
 from langchain.document_loaders.blob_loaders.schema import Blob
@@ -94,10 +95,12 @@ def rabbithole_instantiates_parsers(file_handlers: dict, cat) -> dict:
              log.info(f"Loaded settings via get_plugin: {settings}")
 
         ignore_display_none = settings.get("ignore_display_none", False)
-        log.info(f"ignore_display_none setting is: {ignore_display_none}")
         
         if ignore_display_none:
             file_handlers["text/html"] = CustomHTMLParser(ignore_display_none=True)
+        
+        # file_handlers["application/pdf"] = HybridPDFParser()
+        # log.info("Switched to HybridPDFParser for application/pdf")
             
     except Exception as e:
         log.error(f"Error in rabbithole_instantiates_parsers: {e}")
@@ -110,3 +113,33 @@ def rabbithole_instantiates_parsers(file_handlers: dict, cat) -> dict:
         }))
             
     return file_handlers
+
+
+@hook
+def after_rabbithole_splitted_text(chunks, cat):
+    filtered_chunks = []
+    # Regex to catch sequences of (cid:XXX) repeated at least twice
+    cid_pattern = re.compile(r'(\(cid:\d+\)\s*){2,}')
+
+    for chunk in chunks:
+        # 1. check if the length of the chunk text is less than 50 chars
+        if len(chunk.page_content) < 50:
+            continue
+
+        # 2. check if the chunk's source metadata ends with .pdf
+        source = chunk.metadata.get("source", "")
+        if source.lower().endswith(".pdf"):
+            
+            # a. check for repeated characters (ignoring spaces)
+            s = chunk.page_content.replace(" ", "").strip()
+            if s and s.count(s[0]) == len(s):
+                continue
+            
+            # b. check for CID pattern
+            if cid_pattern.search(chunk.page_content):
+                continue
+        
+        filtered_chunks.append(chunk)
+    if len(filtered_chunks) == 0:
+        log.warning("All chunks were filtered out in after_rabbithole_splitted_text hook.")
+    return filtered_chunks

@@ -47,6 +47,12 @@ class MemoryUpdaterSettings(BaseModel):
         title="Enable Parallel Check",
         description="Enable parallel checking of URLs to improve performance during ingestion.",
     )
+
+    user_agent: str = Field(
+        default="Magic Browser",
+        title="User Agent",
+        description="User Agent string to use for HTTP requests during optimization checks."
+    )
     
     retry_failed_urls: bool = Field(
         default=True,

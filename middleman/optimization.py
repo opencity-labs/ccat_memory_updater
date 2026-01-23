@@ -10,7 +10,7 @@ from cat.looking_glass.cheshire_cat import CheshireCat
 from cat.mad_hatter.decorators import hook
 
 
-def check_url(url: str, cat: CheshireCat) -> tuple:
+def check_url(url: str, cat: CheshireCat, user_agent: str = "Magic Browser") -> tuple:
     """
     Check if a URL should be updated by comparing server's Last-Modified/ETag
     with the ingestion timestamp of existing memories.
@@ -33,15 +33,15 @@ def check_url(url: str, cat: CheshireCat) -> tuple:
         
         if not points:
             # New URL, must scrape
-            log.info(json.dumps({
-                "component": "ccat_memory_updater",
-                "event": "check_url_decision",
-                "data": {
-                    "url": url,
-                    "decision": "update",
-                    "reason": "new_url_no_memory"
-                }
-            }))
+            # log.info(json.dumps({
+            #     "component": "ccat_memory_updater",
+            #     "event": "check_url_decision",
+            #     "data": {
+            #         "url": url,
+            #         "decision": "update",
+            #         "reason": "new_url_no_memory"
+            #     }
+            # }))
             return url, True
             
         # Get ingestion timestamp from the first point
@@ -51,15 +51,15 @@ def check_url(url: str, cat: CheshireCat) -> tuple:
         
         if not ingestion_timestamp:
             # No timestamp, assume update needed
-            log.info(json.dumps({
-                "component": "ccat_memory_updater",
-                "event": "check_url_decision",
-                "data": {
-                    "url": url,
-                    "decision": "update",
-                    "reason": "no_ingestion_timestamp"
-                }
-            }))
+            # log.info(json.dumps({
+            #     "component": "ccat_memory_updater",
+            #     "event": "check_url_decision",
+            #     "data": {
+            #         "url": url,
+            #         "decision": "update",
+            #         "reason": "no_ingestion_timestamp"
+            #     }
+            # }))
             return url, True
             
         # Ensure ingestion_timestamp is a float
@@ -67,20 +67,20 @@ def check_url(url: str, cat: CheshireCat) -> tuple:
             ingestion_time = datetime.fromtimestamp(float(ingestion_timestamp), tz=timezone.utc)
         except (ValueError, TypeError):
             # Invalid timestamp, update
-            log.info(json.dumps({
-                "component": "ccat_memory_updater",
-                "event": "check_url_decision",
-                "data": {
-                    "url": url,
-                    "decision": "update",
-                    "reason": "invalid_ingestion_timestamp",
-                    "raw_timestamp": str(ingestion_timestamp)
-                }
-            }))
+            # log.info(json.dumps({
+            #     "component": "ccat_memory_updater",
+            #     "event": "check_url_decision",
+            #     "data": {
+            #         "url": url,
+            #         "decision": "update",
+            #         "reason": "invalid_ingestion_timestamp",
+            #         "raw_timestamp": str(ingestion_timestamp)
+            #     }
+            # }))
             return url, True
 
         # 2. Fetch HTTP headers
-        headers = {"User-Agent": "Magic Browser"}
+        headers = {"User-Agent": user_agent}
         try:
             # Use HEAD request to get headers only
             response = httpx.head(url, headers=headers, timeout=10, follow_redirects=True)
@@ -92,48 +92,48 @@ def check_url(url: str, cat: CheshireCat) -> tuple:
             
             # If still error, assume update needed
             if response.status_code >= 400:
-                log.info(json.dumps({
-                    "component": "ccat_memory_updater",
-                    "event": "check_url_decision",
-                    "data": {
-                        "url": url,
-                        "decision": "update",
-                        "reason": "http_error",
-                        "status_code": response.status_code
-                    }
-                }))
+                # log.info(json.dumps({
+                #     "component": "ccat_memory_updater",
+                #     "event": "check_url_decision",
+                #     "data": {
+                #         "url": url,
+                #         "decision": "update",
+                #         "reason": "http_error",
+                #         "status_code": response.status_code
+                #     }
+                # }))
                 return url, True
                 
         except Exception as e:
-            log.warning(json.dumps({
-                "component": "ccat_memory_updater",
-                "event": "check_url_fetch_error",
-                "data": {
-                    "url": url,
-                    "error": str(e)
-                }
-            }))
+            # log.warning(json.dumps({
+            #     "component": "ccat_memory_updater",
+            #     "event": "check_url_fetch_error",
+            #     "data": {
+            #         "url": url,
+            #         "error": str(e)
+            #     }
+            # }))
             return url, True
             
         # 3. Compare timestamps
         server_etag = response.headers.get("ETag")
-        if server_etag:
-            log.info(json.dumps({
-                "component": "ccat_memory_updater",
-                "event": "check_url_etag_found",
-                "data": {
-                    "url": url,
-                    "etag": server_etag
-                }
-            }))
-        else:
-            log.info(json.dumps({
-                "component": "ccat_memory_updater",
-                "event": "check_url_no_etag",
-                "data": {
-                    "url": url
-                }
-            }))
+        # if server_etag:
+        #     log.info(json.dumps({
+        #         "component": "ccat_memory_updater",
+        #         "event": "check_url_etag_found",
+        #         "data": {
+        #             "url": url,
+        #             "etag": server_etag
+        #         }
+        #     }))
+        # else:
+        #     log.info(json.dumps({
+        #         "component": "ccat_memory_updater",
+        #         "event": "check_url_no_etag",
+        #         "data": {
+        #             "url": url
+        #         }
+        #     }))
 
         server_last_modified = response.headers.get("Last-Modified")
         
@@ -147,53 +147,54 @@ def check_url(url: str, cat: CheshireCat) -> tuple:
                 # Add a small buffer (e.g. 1 second) to avoid precision issues
                 if server_time <= ingestion_time:
                     # Content is older or same age as ingestion -> Unchanged
-                    log.info(json.dumps({
-                        "component": "ccat_memory_updater",
-                        "event": "check_url_decision",
-                        "data": {
-                            "url": url,
-                            "decision": "skip",
-                            "reason": "unchanged",
-                            "server_time": str(server_time),
-                            "ingestion_time": str(ingestion_time)
-                        }
-                    }))
+                    # log.info(json.dumps({
+                    #     "component": "ccat_memory_updater",
+                    #     "event": "check_url_decision",
+                    #     "data": {
+                    #         "url": url,
+                    #         "decision": "skip",
+                    #         "reason": "unchanged",
+                    #         "server_time": str(server_time),
+                    #         "ingestion_time": str(ingestion_time)
+                    #     }
+                    # }))
                     return url, False
                 else:
                     # Content is newer -> Update
-                    log.info(json.dumps({
-                        "component": "ccat_memory_updater",
-                        "event": "check_url_decision",
-                        "data": {
-                            "url": url,
-                            "decision": "update",
-                            "reason": "content_newer",
-                            "server_time": str(server_time),
-                            "ingestion_time": str(ingestion_time)
-                        }
-                    }))
+                    # log.info(json.dumps({
+                    #     "component": "ccat_memory_updater",
+                    #     "event": "check_url_decision",
+                    #     "data": {
+                    #         "url": url,
+                    #         "decision": "update",
+                    #         "reason": "content_newer",
+                    #         "server_time": str(server_time),
+                    #         "ingestion_time": str(ingestion_time)
+                    #     }
+                    # }))
                     return url, True
             except Exception as e:
-                log.warning(json.dumps({
-                    "component": "ccat_memory_updater",
-                    "event": "check_url_date_parse_error",
-                    "data": {
-                        "url": url,
-                        "error": str(e),
-                        "last_modified_header": server_last_modified
-                    }
-                }))
+                # log.warning(json.dumps({
+                #     "component": "ccat_memory_updater",
+                #     "event": "check_url_date_parse_error",
+                #     "data": {
+                #         "url": url,
+                #         "error": str(e),
+                #         "last_modified_header": server_last_modified
+                #     }
+                # }))
                 return url, True
         else:
-            log.info(json.dumps({
-                "component": "ccat_memory_updater",
-                "event": "check_url_decision",
-                "data": {
-                    "url": url,
-                    "decision": "update",
-                    "reason": "missing_last_modified"
-                }
-            }))
+            # log.info(json.dumps({
+            #     "component": "ccat_memory_updater",
+            #     "event": "check_url_decision",
+            #     "data": {
+            #         "url": url,
+            #         "decision": "update",
+            #         "reason": "missing_last_modified"
+            #     }
+            # }))
+            pass
         
         # Fallback: Check ETag if Last-Modified is missing
         # Note: ETag comparison requires storing the ETag from previous scrape.
@@ -204,14 +205,14 @@ def check_url(url: str, cat: CheshireCat) -> tuple:
         return url, True
 
     except Exception as e:
-        log.error(json.dumps({
-            "component": "ccat_memory_updater",
-            "event": "check_url_unexpected_error",
-            "data": {
-                "url": url,
-                "error": str(e)
-            }
-        }))
+        # log.error(json.dumps({
+        #     "component": "ccat_memory_updater",
+        #     "event": "check_url_unexpected_error",
+        #     "data": {
+        #         "url": url,
+        #         "error": str(e)
+        #     }
+        # }))
         return url, True
 
 
@@ -224,19 +225,20 @@ def scrapycat_after_scraping(context_data: Dict[str, Any], cat: CheshireCat) -> 
     
     # Load settings
     settings = cat.mad_hatter.plugins["ccat_memory_updater"].load_settings()
+    user_agent = settings.get("user_agent", "Magic Browser")
     
     session_id = context_data.get('session_id')
     scraped_pages = context_data.get('scraped_pages', [])
     
     if scraped_pages:
-        log.info(json.dumps({
-            "component": "ccat_memory_updater",
-            "event": "optimization_check_start",
-            "data": {
-                "page_count": len(scraped_pages),
-                "session_id": session_id
-            }
-        }))
+        # log.info(json.dumps({
+        #     "component": "ccat_memory_updater",
+        #     "event": "optimization_check_start",
+        #     "data": {
+        #         "page_count": len(scraped_pages),
+        #         "session_id": session_id
+        #     }
+        # }))
         
         pages_to_update = []
         pages_ignored = []
@@ -246,7 +248,7 @@ def scrapycat_after_scraping(context_data: Dict[str, Any], cat: CheshireCat) -> 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all checks
             future_to_url = {
-                executor.submit(check_url, url, cat): url 
+                executor.submit(check_url, url, cat, user_agent): url 
                 for url in scraped_pages
             }
             
@@ -275,24 +277,24 @@ def scrapycat_after_scraping(context_data: Dict[str, Any], cat: CheshireCat) -> 
                     else:
                         pages_ignored.append(checked_url)
                 except Exception as e:
-                    log.error(json.dumps({
-                        "component": "ccat_memory_updater",
-                        "event": "optimization_check_error",
-                        "data": {
-                            "url": url,
-                            "error": str(e)
-                        }
-                    }))
+                    # log.error(json.dumps({
+                    #     "component": "ccat_memory_updater",
+                    #     "event": "optimization_check_error",
+                    #     "data": {
+                    #         "url": url,
+                    #         "error": str(e)
+                    #     }
+                    # }))
                     pages_to_update.append(url) # Default to update on error
         
-        log.info(json.dumps({
-            "component": "ccat_memory_updater",
-            "event": "optimization_complete",
-            "data": {
-                "pages_to_update": len(pages_to_update),
-                "pages_ignored": len(pages_ignored)
-            }
-        }))
+        # log.info(json.dumps({
+        #     "component": "ccat_memory_updater",
+        #     "event": "optimization_complete",
+        #     "data": {
+        #         "pages_to_update": len(pages_to_update),
+        #         "pages_ignored": len(pages_ignored)
+        #     }
+        # }))
         
         # Update context
         context_data['scraped_pages'] = pages_to_update
