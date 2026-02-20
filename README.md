@@ -108,6 +108,14 @@ This plugin uses structured JSON logging to facilitate monitoring and debugging.
 | `optimization_progress` | Logged periodically during parallel URL checking |
 | `optimization_check_error` | Logged when checking a specific URL fails |
 | `optimization_complete` | Logged when optimization is complete |
+| `sitemap_fetch_status` | Logged with HTTP status after fetching `sitemap.xml` |
+| `sitemap_fetch_error` | Logged when fetching `sitemap.xml` fails |
+| `sitemap_parse_error` | Logged when XML parsing of sitemap fails |
+| `sitemap_regex_fallback_found` | Logged when regex fallback extracts URLs from sitemap content |
+| `sitemap_urls_found` | Logged with the count of URLs discovered in a sitemap |
+| `sitemap_url_discovered` | Logged for each new URL discovered in sitemaps |
+| `sitemap_added_from_sitemaps` | Logged when new sitemap URLs are added to the scrape list |
+| `sitemap_none_found` | Logged when no sitemap URLs were added |
 
 #### Cleanup (`middleman/cleanup.py`)
 | Event Name | Description |
