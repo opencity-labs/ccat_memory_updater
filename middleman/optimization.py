@@ -1,5 +1,6 @@
 import json
 import httpx
+import time
 import email.utils
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
@@ -243,29 +244,72 @@ def get_sitemap_urls(root_url: str, user_agent: str) -> Set[str]:
     """Fetch and parse sitemap.xml for a given root URL."""
     sitemap_urls = set()
     sitemap_endpoint = f"{root_url.rstrip('/')}/sitemap.xml"
-
+    time.sleep(5)
     try:
         headers = {"User-Agent": user_agent}
 
-        response = httpx.get(
-            sitemap_endpoint, headers=headers, timeout=10, follow_redirects=True
-        )
+        response = None
+        current_wait = 2
+        max_retries = 5
 
-        log.info(
-            json.dumps(
-                {
-                    "component": "ccat_memory_updater",
-                    "event": "sitemap_fetch_status",
-                    "data": {
-                        "sitemap_endpoint": sitemap_endpoint,
-                        "root_url": root_url,
-                        "status_code": response.status_code,
-                    },
-                }
+        for attempt in range(max_retries):
+            response = httpx.get(
+                sitemap_endpoint, headers=headers, timeout=60, follow_redirects=True
             )
-        )
 
-        if response.status_code == 200:
+            log.info(
+                json.dumps(
+                    {
+                        "component": "ccat_memory_updater",
+                        "event": "sitemap_fetch_status",
+                        "data": {
+                            "sitemap_endpoint": sitemap_endpoint,
+                            "root_url": root_url,
+                            "status_code": response.status_code,
+                            "attempt": attempt + 1,
+                        },
+                    }
+                )
+            )
+
+            if response.status_code == 429:
+                if attempt < max_retries - 1:
+                    log.warning(
+                        json.dumps(
+                            {
+                                "component": "ccat_memory_updater",
+                                "event": "sitemap_rate_limit_wait",
+                                "data": {
+                                    "sitemap_endpoint": sitemap_endpoint,
+                                    "status_code": response.status_code,
+                                    "wait_seconds": current_wait,
+                                    "next_retry_attempt": attempt + 2,
+                                },
+                            }
+                        )
+                    )
+                    time.sleep(current_wait)
+                    current_wait *= 2  # Exponential backoff
+                    continue
+                else:
+                    log.warning(
+                        json.dumps(
+                            {
+                                "component": "ccat_memory_updater",
+                                "event": "sitemap_rate_limit_exceeded",
+                                "data": {
+                                    "sitemap_endpoint": sitemap_endpoint,
+                                    "status_code": response.status_code,
+                                    "attempts": max_retries,
+                                },
+                            }
+                        )
+                    )
+
+            # If not 429, break the loop
+            break
+
+        if response and response.status_code == 200:
             # Parse XML content
             try:
                 # Remove encoding declaration if present to avoid parsing issues with strings
@@ -351,6 +395,88 @@ def get_sitemap_urls(root_url: str, user_agent: str) -> Set[str]:
 
 
 @hook
+def scrapycat_before_scraping(
+    context_data: Dict[str, Any], cat: CheshireCat
+) -> Dict[str, Any]:
+    """
+    Hook called by ScrapyCat before scraping starts.
+    We use this to fetch sitemaps and add URLs to the scraped pages list.
+    """
+    settings = cat.mad_hatter.plugins["ccat_memory_updater"].load_settings()
+    user_agent = settings.get("user_agent", "Magic Browser")
+    if user_agent:
+        user_agent = user_agent.strip()
+
+    # Let's try to parse command string to find URLs
+    command = context_data.get("command", "")
+    parts = command.split()
+
+    # Simple extraction of URLs from command
+    urls_from_command = []
+    for part in parts:
+        if part.startswith("http"):
+            urls_from_command.append(part)
+
+    if not urls_from_command:
+        return context_data
+
+    # Infer root domains
+    root_domains = set()
+    for url in urls_from_command:
+        try:
+            parsed = urlparse(url)
+            if parsed.scheme and parsed.netloc:
+                root_domains.add(f"{parsed.scheme}://{parsed.netloc}")
+        except Exception:
+            continue
+
+    # Initialize scraped_pages if not present
+    if "scraped_pages" not in context_data:
+        context_data["scraped_pages"] = []
+
+    existing_urls_set = set(context_data["scraped_pages"])
+
+    new_urls_from_sitemaps = set()
+    for root in root_domains:
+        sitemap_urls = get_sitemap_urls(root, user_agent)
+        for s_url in sitemap_urls:
+            if s_url not in existing_urls_set:
+                new_urls_from_sitemaps.add(s_url)
+                # log.info(
+                #     json.dumps(
+                #         {
+                #             "component": "ccat_memory_updater",
+                #             "event": "sitemap_url_discovered_before_scraping",
+                #             "data": {"url": s_url, "root": root},
+                #         }
+                #     )
+                # )
+
+    if new_urls_from_sitemaps:
+        # Extend scraped_pages
+        # Note: These pages will be ingested by ScrapyCat but not necessarily crawled deeply if robot limit prevents it,
+        # but ScrapyCat iterates scraped_pages for ingestion.
+        current_pages = context_data.get("scraped_pages", [])
+        current_pages.extend(list(new_urls_from_sitemaps))
+        context_data["scraped_pages"] = current_pages
+
+        log.info(
+            json.dumps(
+                {
+                    "component": "ccat_memory_updater",
+                    "event": "sitemap_added_before_scraping",
+                    "data": {
+                        "added_count": len(new_urls_from_sitemaps),
+                        "root_count": len(root_domains),
+                    },
+                }
+            )
+        )
+
+    return context_data
+
+
+@hook
 def scrapycat_after_scraping(
     context_data: Dict[str, Any], cat: CheshireCat
 ) -> Dict[str, Any]:
@@ -372,64 +498,6 @@ def scrapycat_after_scraping(
 
     if scraped_pages:
 
-        # Infer root domains and check sitemaps
-        existing_urls_set = set(scraped_pages)
-        root_domains = set()
-
-        for url in scraped_pages:
-            try:
-                parsed = urlparse(url)
-                if parsed.scheme and parsed.netloc:
-                    root_domains.add(f"{parsed.scheme}://{parsed.netloc}")
-            except Exception:
-                continue
-
-        new_urls_from_sitemaps = set()
-        for root in root_domains:
-            # We look for sitemap urls specifically and only add those not already scraped
-            sitemap_urls = get_sitemap_urls(root, user_agent)
-            for s_url in sitemap_urls:
-                if s_url not in existing_urls_set:
-                    new_urls_from_sitemaps.add(s_url)
-                    log.info(
-                        json.dumps(
-                            {
-                                "component": "ccat_memory_updater",
-                                "event": "sitemap_url_discovered",
-                                "data": {"url": s_url, "root": root},
-                            }
-                        )
-                    )
-
-        if new_urls_from_sitemaps:
-            scraped_pages.extend(list(new_urls_from_sitemaps))
-            log.info(
-                json.dumps(
-                    {
-                        "component": "ccat_memory_updater",
-                        "event": "sitemap_added_from_sitemaps",
-                        "data": {
-                            "added_count": len(new_urls_from_sitemaps),
-                            "root_count": len(root_domains),
-                            "session_id": session_id,
-                        },
-                    }
-                )
-            )
-        else:
-            log.info(
-                json.dumps(
-                    {
-                        "component": "ccat_memory_updater",
-                        "event": "sitemap_none_found",
-                        "data": {
-                            "root_count": len(root_domains),
-                            "session_id": session_id,
-                        },
-                    }
-                )
-            )
-
         log.info(
             json.dumps(
                 {
@@ -442,8 +510,6 @@ def scrapycat_after_scraping(
                 }
             )
         )
-
-        # os._exit(0)  # Temporary exit to skip optimization during testing
 
         pages_to_update = []
         pages_ignored = []
