@@ -1,6 +1,6 @@
 {
     "name": "Memory Updater",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "description": "Remove and add memories to the internal db by source url.",
     "author_name": "OpenCity Labs",
     "author_url": "https://opencitylabs.it/",

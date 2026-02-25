@@ -453,9 +453,6 @@ def scrapycat_before_scraping(
                 # )
 
     if new_urls_from_sitemaps:
-        # Extend scraped_pages
-        # Note: These pages will be ingested by ScrapyCat but not necessarily crawled deeply if robot limit prevents it,
-        # but ScrapyCat iterates scraped_pages for ingestion.
         current_pages = context_data.get("scraped_pages", [])
         current_pages.extend(list(new_urls_from_sitemaps))
         context_data["scraped_pages"] = current_pages
@@ -493,8 +490,6 @@ def scrapycat_after_scraping(
 
     session_id = context_data.get("session_id")
     scraped_pages = context_data.get("scraped_pages", [])
-
-    # log.info(f"Optimization Hook Triggered. scraped_pages count: {len(scraped_pages)}")
 
     if scraped_pages:
 
@@ -535,7 +530,7 @@ def scrapycat_after_scraping(
                     processed_count += 1
                     url = future_to_url[future]
 
-                    if processed_count % 5 == 0 or processed_count == total_pages:
+                    if processed_count % 100 == 0 or processed_count == total_pages:
                         log.info(
                             json.dumps(
                                 {
