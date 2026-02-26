@@ -11,37 +11,37 @@ class Action(Enum):
 # settings
 class MemoryUpdaterSettings(BaseModel):
     """Settings for the Memory Updater plugin."""
-    
+
     link: str = Field(
         default="",
         title="Link to Content",
-        description="The URL or link to the content source for memory operations."
+        description="The URL or link to the content source for memory operations.",
     )
-    
+
     action: Action = Field(
         default=Action.REPLACE,
         title="Action to Perform",
-        description="Choose 'delete' to only delete memories with matching source, or 'replace' to delete and then upload new content from the link."
+        description="Choose 'delete' to only delete memories with matching source, or 'replace' to delete and then upload new content from the link.",
     )
-    
+
     chunk_size: int = Field(
         default=1024,
         title="Chunk Size",
-        description="The size of text chunks when uploading new content (only used for 'replace' action)."
+        description="The size of text chunks when uploading new content (only used for 'replace' action).",
     )
-    
+
     chunk_overlap: int = Field(
         default=256,
         title="Chunk Overlap",
-        description="The overlap between text chunks when uploading new content (only used for 'replace' action)."
+        description="The overlap between text chunks when uploading new content (only used for 'replace' action).",
     )
-    
+
     dietician_scrapycat_middleman: bool = Field(
         default=False,
         title="Dietician ScrapyCat Middleman",
         description="Enable coordination between ScrapyCat and Dietician for automatic cleanup of outdated scraped content.",
     )
-    
+
     enable_parallel_check: bool = Field(
         default=False,
         title="Enable Parallel Check",
@@ -51,45 +51,51 @@ class MemoryUpdaterSettings(BaseModel):
     user_agent: str = Field(
         default="Magic Browser",
         title="User Agent",
-        description="User Agent string to use for HTTP requests during optimization checks."
+        description="User Agent string to use for HTTP requests during optimization checks.",
     )
-    
+
     retry_failed_urls: bool = Field(
         default=True,
         title="Retry Failed URLs",
         description="Automatically retry URLs that failed during the initial ScrapyCat ingestion process.",
     )
-    
+
     max_retry_attempts: int = Field(
         default=3,
         title="Max Retry Attempts",
-        description="Maximum number of retry attempts for failed URLs (only used when retry_failed_urls is enabled)."
+        description="Maximum number of retry attempts for failed URLs (only used when retry_failed_urls is enabled).",
     )
-    
+
     retry_delay_seconds: int = Field(
         default=2,
         title="Retry Delay (seconds)",
-        description="Delay in seconds between retry attempts for failed URLs."
+        description="Delay in seconds between retry attempts for failed URLs.",
     )
 
     ignore_display_none: bool = Field(
         default=False,
         title="Ignore Display None",
-        description="If enabled, ignores any div elements with style='display: none' during ingestion."
+        description="If enabled, ignores any div elements with style='display: none' during ingestion.",
     )
-    
-    @validator('max_retry_attempts')
+
+    sitemap_fetch: bool = Field(
+        default=False,
+        title="Enable Sitemap Fetch",
+        description="When enabled, the plugin will attempt to fetch sitemap.xml entries during the ScrapyCat before-scraping hook.",
+    )
+
+    @validator("max_retry_attempts")
     def validate_max_retry_attempts(cls, v):
         """Validate that max retry attempts is between 1 and 10"""
         if not 1 <= v <= 10:
-            raise ValueError('Max retry attempts must be between 1 and 10')
+            raise ValueError("Max retry attempts must be between 1 and 10")
         return v
-    
-    @validator('retry_delay_seconds')
+
+    @validator("retry_delay_seconds")
     def validate_retry_delay_seconds(cls, v):
         """Validate that retry delay is between 0 and 60"""
         if not 0 <= v <= 60:
-            raise ValueError('Retry delay must be between 0 and 60 seconds')
+            raise ValueError("Retry delay must be between 0 and 60 seconds")
         return v
 
 

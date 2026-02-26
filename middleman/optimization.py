@@ -272,7 +272,9 @@ def get_sitemap_urls(root_url: str, user_agent: str) -> Set[str]:
                 )
             )
 
-            if response.status_code == 429:
+            if response.status_code != 200:
+                if response.status_code == 429:
+                    current_wait *= 5
                 if attempt < max_retries - 1:
                     log.warning(
                         json.dumps(
@@ -305,8 +307,6 @@ def get_sitemap_urls(root_url: str, user_agent: str) -> Set[str]:
                             }
                         )
                     )
-
-            # If not 429, break the loop
             break
 
         if response and response.status_code == 200:
@@ -403,6 +403,20 @@ def scrapycat_before_scraping(
     We use this to fetch sitemaps and add URLs to the scraped pages list.
     """
     settings = cat.mad_hatter.plugins["ccat_memory_updater"].load_settings()
+
+    # Sitemap fetching can be toggled via settings
+    if not settings.get("sitemap_fetch", True):
+        log.info(
+            json.dumps(
+                {
+                    "component": "ccat_memory_updater",
+                    "event": "sitemap_fetch_disabled",
+                    "data": {},
+                }
+            )
+        )
+        return context_data
+
     user_agent = settings.get("user_agent", "Magic Browser")
     if user_agent:
         user_agent = user_agent.strip()
